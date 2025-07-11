@@ -24,24 +24,51 @@ class MarkdownMemoryManager:
     """Markdown 記憶管理器"""
     
     def __init__(self, memory_dir: str = "ai-memory"):
-        # 如果是相對路徑，轉換為絕對路徑
-        if not Path(memory_dir).is_absolute():
-            # 使用腳本所在目錄作為基準
-            script_dir = Path(__file__).parent
-            self.memory_dir = script_dir / memory_dir
-        else:
+        # 總是使用腳本所在目錄作為基準，確保路徑穩定性
+        script_dir = Path(__file__).parent.resolve()  # 使用 resolve() 獲取絕對路徑
+        
+        if Path(memory_dir).is_absolute():
+            # 如果提供絕對路徑，直接使用
             self.memory_dir = Path(memory_dir)
+        else:
+            # 相對路徑總是相對於腳本目錄
+            self.memory_dir = script_dir / memory_dir
+        
+        # 確保使用絕對路徑
+        self.memory_dir = self.memory_dir.resolve()
+        
+        # 記錄路徑信息用於調試
+        logger.info(f"Script directory: {script_dir}")
+        logger.info(f"Target memory directory: {self.memory_dir}")
         
         # 確保目錄存在
         try:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Memory directory initialized: {self.memory_dir.absolute()}")
+            logger.info(f"Memory directory successfully initialized: {self.memory_dir}")
+            
+            # 驗證目錄是否可寫
+            test_file = self.memory_dir / ".write_test"
+            try:
+                test_file.write_text("test")
+                test_file.unlink()  # 刪除測試文件
+                logger.info("Memory directory write test passed")
+            except Exception as write_error:
+                logger.error(f"Memory directory is not writable: {write_error}")
+                raise OSError(f"Memory directory not writable: {self.memory_dir}")
+                
         except OSError as e:
-            logger.error(f"Failed to create memory directory: {e}")
-            # 如果無法創建，使用臨時目錄
+            logger.error(f"Failed to create memory directory at {self.memory_dir}: {e}")
+            # 如果無法創建，嘗試在用戶主目錄創建
             import tempfile
-            self.memory_dir = Path(tempfile.mkdtemp(prefix="ai-memory-"))
-            logger.warning(f"Using temporary directory: {self.memory_dir.absolute()}")
+            fallback_dir = Path.home() / ".ai-memory"
+            try:
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                self.memory_dir = fallback_dir
+                logger.warning(f"Using fallback directory in user home: {self.memory_dir}")
+            except OSError:
+                # 最後的備選方案：使用臨時目錄
+                self.memory_dir = Path(tempfile.mkdtemp(prefix="ai-memory-"))
+                logger.warning(f"Using temporary directory: {self.memory_dir}")
 
     def get_memory_file(self, project_id: str) -> Path:
         """取得專案記憶檔案路徑"""
@@ -278,6 +305,12 @@ class MCPServer:
                 return await self.list_tools()
             elif method == 'tools/call':
                 return await self.call_tool(message['params'])
+            elif method == 'resources/list':
+                return await self.list_resources()
+            elif method == 'prompts/list':
+                return await self.list_prompts()
+            elif method == 'notifications/initialized':
+                return await self.handle_initialized()
             else:
                 return self._error_response(-32601, f"Method not found: {method}")
                 
@@ -288,6 +321,7 @@ class MCPServer:
     async def handle_initialize(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """處理初始化請求"""
         return {
+            'jsonrpc': '2.0',
             'result': {
                 'protocolVersion': '2024-11-05',
                 'capabilities': {
@@ -424,10 +458,34 @@ class MCPServer:
         ]
         
         return {
+            'jsonrpc': '2.0',
             'result': {
                 'tools': tools
             }
         }
+
+    async def list_resources(self) -> Dict[str, Any]:
+        """列出可用資源（目前為空）"""
+        return {
+            'jsonrpc': '2.0',
+            'result': {
+                'resources': []
+            }
+        }
+
+    async def list_prompts(self) -> Dict[str, Any]:
+        """列出可用提示（目前為空）"""
+        return {
+            'jsonrpc': '2.0',
+            'result': {
+                'prompts': []
+            }
+        }
+
+    async def handle_initialized(self) -> None:
+        """處理初始化完成通知（無需回應）"""
+        logger.info("Client initialization completed")
+        return None
 
     async def call_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """執行工具調用"""
@@ -544,6 +602,7 @@ class MCPServer:
     def _success_response(self, text: str) -> Dict[str, Any]:
         """建立成功回應"""
         return {
+            'jsonrpc': '2.0',
             'result': {
                 'content': [{
                     'type': 'text',
@@ -555,6 +614,7 @@ class MCPServer:
     def _error_response(self, code: int, message: str) -> Dict[str, Any]:
         """建立錯誤回應"""
         return {
+            'jsonrpc': '2.0',
             'error': {
                 'code': code,
                 'message': message
@@ -582,13 +642,15 @@ class MCPServer:
                     message = json.loads(line.strip())
                     response = await self.handle_message(message)
                     
-                    # 設定 response ID
-                    if 'id' in message:
-                        response['id'] = message['id']
-                    
-                    # 將回應寫入 stdout
-                    print(json.dumps(response, ensure_ascii=False))
-                    sys.stdout.flush()
+                    # 只有非通知消息才需要回應
+                    if response is not None:
+                        # 設定 response ID
+                        if 'id' in message:
+                            response['id'] = message['id']
+                        
+                        # 將回應寫入 stdout
+                        print(json.dumps(response, ensure_ascii=False))
+                        sys.stdout.flush()
                     
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received: {e}")
