@@ -8,7 +8,8 @@
 - 🔍 強大的搜尋功能
 - 📊 專案分類管理
 - 🕒 時間戳記跟蹤
-- 🎯 與 Claude Code / Cursor 完美整合
+- 🎯 與 Claude Desktop / Claude Code / Cursor / Rovo Dev 完美整合
+- 🚀 支援 Rovo Dev 的 `acli` 命令管理
 - 🐍 純 Python 實作，無額外依賴
 
 ## 🛠️ 安裝和設定
@@ -30,8 +31,8 @@ cd markdown-memory-mcp-server
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# 安裝依賴（目前使用 Python 標準庫，無需額外依賴）
-pip install -r requirements.txt
+# 檢查依賴（目前使用 Python 標準庫，無需額外依賴）
+# pip install -r requirements.txt  # 目前無需執行此步驟
 
 # 設定執行權限（macOS/Linux）
 chmod +x memory_mcp_server.py
@@ -75,8 +76,12 @@ pwd
 
 #### Claude Code / Cursor 設定
 
+**設定檔位置**：
+- **macOS/Linux**: `~/.cursor/mcp.json`
+- **Windows**: `%USERPROFILE%\.cursor\mcp.json`
+
 **方法 1: 全域設定**
-編輯 `~/.cursor/mcp.json`：
+編輯設定檔：
 ```json
 {
   "mcpServers": {
@@ -85,7 +90,7 @@ pwd
       "args": ["/absolute/path/to/memory_mcp_server.py"],
       "transport": "stdio",
       "env": {
-        "PYTHONPATH": "/absolute/path/to/markdown-memory-mcp"
+        "PYTHONPATH": "/absolute/path/to/markdown-memory-mcp-server"
       }
     }
   }
@@ -93,7 +98,7 @@ pwd
 ```
 
 **方法 2: 專案設定**
-在專案根目錄創建 `.cursor/mcp.json`：
+在專案根目錄創建 `.cursor/mcp.json`（所有作業系統相同）：
 ```json
 {
   "mcpServers": {
@@ -106,10 +111,96 @@ pwd
 }
 ```
 
+#### Rovo Dev 設定 🚀
+
+**設定檔位置**：
+- **macOS/Linux**: `~/.rovodev/mcp.json`
+- **Windows**: `%USERPROFILE%\.rovodev\mcp.json`
+
+**為什麼 Rovo Dev 需要這個記憶伺服器？**
+- 🔄 Rovo Dev 每個資料夾都是獨立的工作環境
+- 💾 內建記憶功能不會持久化儲存到檔案
+- 🚫 無法跨專案或跨資料夾記住開發歷程和知識
+- 🧠 需要外部記憶系統來維持長期記憶和學習積累
+
+**快速設定（推薦方法）**
+```bash
+# 開啟 MCP 設定檔
+acli rovodev mcp
+
+# 查看 Rovo Dev 日誌
+acli rovodev log
+
+# 啟動 Rovo Dev（設定完成後）
+acli rovodev run
+```
+
+**手動設定方式**
+編輯 `~/.rovodev/mcp.json`：
+```json
+{
+  "mcpServers": {
+    "markdown-memory": {
+      "command": "python3",
+      "args": ["/absolute/path/to/memory_mcp_server.py"],
+      "transport": "stdio",
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/markdown-memory-mcp-server",
+        "PYTHONIOENCODING": "utf-8",
+        "PATH": "/usr/local/bin:/usr/bin:/bin"
+      },
+      "cwd": "/absolute/path/to/markdown-memory-mcp-server"
+    }
+  }
+}
+```
+
+**Rovo Dev 專用配置範例**
+```json
+{
+  "mcpServers": {
+    "markdown-memory": {
+      "command": "python3",
+      "args": ["/absolute/path/to/memory_mcp_server.py"],
+      "transport": "stdio",
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/markdown-memory-mcp-server",
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "cwd": "/absolute/path/to/markdown-memory-mcp-server",
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false
+      }
+    }
+  },
+  "globalSettings": {
+    "logLevel": "info",
+    "timeout": 30000
+  }
+}
+```
+
+**驗證 Rovo Dev 設定**
+```bash
+# 檢查設定檔是否正確
+acli rovodev mcp --validate
+
+# 測試 MCP 伺服器連接
+acli rovodev test-mcp markdown-memory
+
+# 查看所有已配置的 MCP 伺服器
+acli rovodev list-mcp
+```
+
 ## 📖 使用說明
 
-### 重啟 Claude Desktop
-設定完成後，**完全關閉並重新啟動 Claude Desktop**。
+### 重啟應用程式
+設定完成後：
+- **Claude Desktop**: 完全關閉並重新啟動 Claude Desktop
+- **Rovo Dev**: 執行 `acli rovodev restart` 或 `acli rovodev run`
+- **Cursor**: 重新載入視窗 (Ctrl/Cmd + Shift + P → "Developer: Reload Window")
 
 ### ⚠️ 重要說明
 
@@ -230,9 +321,76 @@ ls -la memory_mcp_server.py
 ```
 
 4. **Windows 用戶常見問題**
-   - 使用 `python` 而不是 `python3`
    - 路徑使用反斜線 `\` 或雙反斜線 `\\`
    - 設定檔位置：`%APPDATA%\Claude\claude_desktop_config.json`
+   - Python 命令可能是 `python` 或 `python3`，取決於安裝方式
+   
+   **檢查 Windows Python 命令**：
+   ```bash
+   # 測試哪個命令可用
+   python --version
+   python3 --version
+   ```
+   
+   **Windows 配置範例**：
+   ```json
+   {
+     "mcpServers": {
+       "markdown-memory": {
+         "command": "python3",
+         "args": ["C:\\path\\to\\memory_mcp_server.py"],
+         "transport": "stdio",
+         "env": {
+           "PYTHONPATH": "C:\\path\\to\\markdown-memory-mcp-server",
+           "PYTHONIOENCODING": "utf-8"
+         },
+         "cwd": "C:\\path\\to\\markdown-memory-mcp-server"
+       }
+     }
+   }
+   ```
+   
+   **如果 `python3` 不可用，改用 `python`**：
+   ```json
+   {
+     "mcpServers": {
+       "markdown-memory": {
+         "command": "python",
+         "args": ["C:\\path\\to\\memory_mcp_server.py"],
+         "transport": "stdio",
+         "env": {
+           "PYTHONPATH": "C:\\path\\to\\markdown-memory-mcp-server",
+           "PYTHONIOENCODING": "utf-8"
+         },
+         "cwd": "C:\\path\\to\\markdown-memory-mcp-server"
+       }
+     }
+   }
+   ```
+
+5. **Rovo Dev 專用故障排除**
+   ```bash
+   # 檢查 Rovo Dev 是否正確安裝
+   acli --version
+   
+   # 驗證 MCP 設定檔格式
+   acli rovodev mcp --validate
+   
+   # 查看詳細日誌
+   acli rovodev log --tail
+   
+   # 重啟 Rovo Dev 服務
+   acli rovodev restart
+   
+   # 測試記憶伺服器連接
+   acli rovodev test-mcp markdown-memory
+   ```
+   
+   **常見 Rovo Dev 錯誤**：
+   - ❌ `MCP server not found`: 檢查路徑是否正確
+   - ❌ `Python command failed`: 確認 Python 環境設定
+   - ❌ `Permission denied`: 檢查檔案執行權限
+   - ❌ `Connection timeout`: 增加 timeout 設定值
 
 ### 驗證安裝
 
