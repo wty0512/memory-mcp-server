@@ -38,9 +38,32 @@ chmod +x memory_mcp_server.py
 chmod +x start_server.sh
 ```
 
-### 3. 設定 Claude Code / Cursor
+### 3. 設定 Claude Desktop / Claude Code / Cursor
 
-#### 方法 1: 全域設定
+#### Claude Desktop 設定
+編輯 Claude Desktop 設定檔：
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "markdown-memory": {
+      "command": "python3",
+      "args": ["/absolute/path/to/memory_mcp_server.py"],
+      "transport": "stdio",
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/markdown-memory-mcp"
+      }
+    }
+  }
+}
+```
+
+#### Claude Code / Cursor 設定
+
+**方法 1: 全域設定**
 編輯 `~/.cursor/mcp.json`：
 ```json
 {
@@ -57,7 +80,7 @@ chmod +x start_server.sh
 }
 ```
 
-#### 方法 2: 專案設定
+**方法 2: 專案設定**
 在專案根目錄創建 `.cursor/mcp.json`：
 ```json
 {
@@ -98,7 +121,7 @@ chmod +x start_server.sh
 
 ## 🚀 部署和整合
 
-### 與 Claude Code 整合
+### 與 Claude Desktop / Claude Code 整合
 
 1. **安裝和設定**
 ```bash
@@ -106,7 +129,22 @@ cd /path/to/your/project
 python3 memory_mcp_server.py
 ```
 
-2. **設定 Cursor/Claude Code**
+2. **設定 Claude Desktop**
+編輯設定檔 `claude_desktop_config.json`：
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "python3",
+      "args": ["/absolute/path/to/memory_mcp_server.py"],
+      "transport": "stdio"
+    }
+  }
+}
+```
+
+3. **設定 Cursor/Claude Code**
+編輯 `mcp.json`：
 ```json
 {
   "mcpServers": {
