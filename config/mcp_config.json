@@ -1,0 +1,14 @@
+{
+  "description": "MCP 設定範例",
+  "servers": {
+    "markdown-memory": {
+      "command": "python3",
+      "args": ["/absolute/path/to/memory_mcp_server.py"],
+      "transport": "stdio",
+      "description": "Markdown Memory MCP Server",
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/project"
+      }
+    }
+  }
+}

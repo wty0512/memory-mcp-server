@@ -1,0 +1,2 @@
+# Python Markdown Memory MCP Server
+# 目前使用 Python 標準庫，無需額外依賴
