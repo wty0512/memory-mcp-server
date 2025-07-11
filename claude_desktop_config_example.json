@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "markdown-memory": {
+      "command": "python3",
+      "args": ["/Users/wangziyan/mcp-servers/memory_mcp_server/memory_mcp_server.py"],
+      "transport": "stdio",
+      "env": {
+        "PYTHONPATH": "/Users/wangziyan/mcp-servers/memory_mcp_server",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}

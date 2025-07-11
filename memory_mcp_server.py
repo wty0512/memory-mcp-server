@@ -591,9 +591,17 @@ if __name__ == "__main__":
     if sys.stdout.encoding != 'utf-8':
         sys.stdout.reconfigure(encoding='utf-8')
     
+    # 添加調試資訊
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"Working directory: {os.getcwd()}")
+    logger.info(f"Script path: {__file__}")
+    
     server = MCPServer()
     try:
         asyncio.run(server.run())
     except KeyboardInterrupt:
         logger.info("Server interrupted")
         sys.exit(0)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        sys.exit(1)
