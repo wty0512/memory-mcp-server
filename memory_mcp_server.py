@@ -24,9 +24,24 @@ class MarkdownMemoryManager:
     """Markdown 記憶管理器"""
     
     def __init__(self, memory_dir: str = "ai-memory"):
-        self.memory_dir = Path(memory_dir)
-        self.memory_dir.mkdir(exist_ok=True)
-        logger.info(f"Memory directory initialized: {self.memory_dir.absolute()}")
+        # 如果是相對路徑，轉換為絕對路徑
+        if not Path(memory_dir).is_absolute():
+            # 使用腳本所在目錄作為基準
+            script_dir = Path(__file__).parent
+            self.memory_dir = script_dir / memory_dir
+        else:
+            self.memory_dir = Path(memory_dir)
+        
+        # 確保目錄存在
+        try:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Memory directory initialized: {self.memory_dir.absolute()}")
+        except OSError as e:
+            logger.error(f"Failed to create memory directory: {e}")
+            # 如果無法創建，使用臨時目錄
+            import tempfile
+            self.memory_dir = Path(tempfile.mkdtemp(prefix="ai-memory-"))
+            logger.warning(f"Using temporary directory: {self.memory_dir.absolute()}")
 
     def get_memory_file(self, project_id: str) -> Path:
         """取得專案記憶檔案路徑"""
