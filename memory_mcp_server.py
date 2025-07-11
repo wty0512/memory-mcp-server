@@ -263,6 +263,205 @@ class MarkdownMemoryManager:
             logger.error(f"Error deleting memory for {project_id}: {e}")
             return False
 
+    def delete_memory_entry(self, project_id: str, entry_id: str = None, timestamp: str = None, 
+                           title: str = None, category: str = None, content_match: str = None) -> Dict[str, Any]:
+        """刪除特定的記憶條目"""
+        try:
+            memory = self.get_memory(project_id)
+            if not memory:
+                return {'success': False, 'message': f'No memory found for project: {project_id}'}
+
+            sections = self._parse_memory_sections(memory)
+            original_count = len(sections)
+            
+            # 根據不同條件篩選要刪除的條目
+            sections_to_keep = []
+            deleted_entries = []
+            
+            for i, section in enumerate(sections):
+                should_delete = False
+                
+                # 根據索引刪除 (entry_id 是從1開始的索引)
+                if entry_id is not None:
+                    try:
+                        entry_index = int(entry_id) - 1  # 轉換為0基索引
+                        if i == entry_index:
+                            should_delete = True
+                    except ValueError:
+                        pass
+                
+                # 根據時間戳刪除
+                elif timestamp and timestamp in section['timestamp']:
+                    should_delete = True
+                
+                # 根據標題刪除
+                elif title and title.lower() in section['title'].lower():
+                    should_delete = True
+                
+                # 根據分類刪除
+                elif category and category.lower() in section['category'].lower():
+                    should_delete = True
+                
+                # 根據內容匹配刪除
+                elif content_match and content_match.lower() in section['content'].lower():
+                    should_delete = True
+                
+                if should_delete:
+                    deleted_entries.append(section)
+                else:
+                    sections_to_keep.append(section)
+            
+            if len(deleted_entries) == 0:
+                return {'success': False, 'message': 'No matching entries found to delete'}
+            
+            # 重建記憶檔案
+            success = self._rebuild_memory_file(project_id, sections_to_keep)
+            
+            if success:
+                message = f"Deleted {len(deleted_entries)} entries from project {project_id}"
+                return {
+                    'success': True, 
+                    'message': message,
+                    'deleted_count': len(deleted_entries),
+                    'remaining_count': len(sections_to_keep),
+                    'deleted_entries': [{'timestamp': e['timestamp'], 'title': e['title']} for e in deleted_entries]
+                }
+            else:
+                return {'success': False, 'message': 'Failed to update memory file'}
+                
+        except Exception as e:
+            logger.error(f"Error deleting memory entry for {project_id}: {e}")
+            return {'success': False, 'message': f'Error: {str(e)}'}
+
+    def edit_memory_entry(self, project_id: str, entry_id: str = None, timestamp: str = None,
+                         new_title: str = None, new_category: str = None, new_content: str = None) -> Dict[str, Any]:
+        """編輯特定的記憶條目"""
+        try:
+            memory = self.get_memory(project_id)
+            if not memory:
+                return {'success': False, 'message': f'No memory found for project: {project_id}'}
+
+            sections = self._parse_memory_sections(memory)
+            
+            # 找到要編輯的條目
+            target_section = None
+            target_index = -1
+            
+            for i, section in enumerate(sections):
+                # 根據索引查找
+                if entry_id is not None:
+                    try:
+                        entry_index = int(entry_id) - 1
+                        if i == entry_index:
+                            target_section = section
+                            target_index = i
+                            break
+                    except ValueError:
+                        pass
+                
+                # 根據時間戳查找
+                elif timestamp and timestamp in section['timestamp']:
+                    target_section = section
+                    target_index = i
+                    break
+            
+            if target_section is None:
+                return {'success': False, 'message': 'No matching entry found to edit'}
+            
+            # 更新條目內容
+            if new_title is not None:
+                sections[target_index]['title'] = new_title
+            if new_category is not None:
+                sections[target_index]['category'] = new_category
+            if new_content is not None:
+                sections[target_index]['content'] = new_content
+            
+            # 重建記憶檔案
+            success = self._rebuild_memory_file(project_id, sections)
+            
+            if success:
+                return {
+                    'success': True,
+                    'message': f"Successfully edited entry in project {project_id}",
+                    'edited_entry': {
+                        'timestamp': sections[target_index]['timestamp'],
+                        'title': sections[target_index]['title'],
+                        'category': sections[target_index]['category']
+                    }
+                }
+            else:
+                return {'success': False, 'message': 'Failed to update memory file'}
+                
+        except Exception as e:
+            logger.error(f"Error editing memory entry for {project_id}: {e}")
+            return {'success': False, 'message': f'Error: {str(e)}'}
+
+    def list_memory_entries(self, project_id: str) -> Dict[str, Any]:
+        """列出專案中的所有記憶條目，帶有索引"""
+        try:
+            memory = self.get_memory(project_id)
+            if not memory:
+                return {'success': False, 'message': f'No memory found for project: {project_id}'}
+
+            sections = self._parse_memory_sections(memory)
+            
+            entries = []
+            for i, section in enumerate(sections):
+                entries.append({
+                    'id': i + 1,  # 1-based index for user convenience
+                    'timestamp': section['timestamp'],
+                    'title': section['title'],
+                    'category': section['category'],
+                    'content_preview': section['content'][:100] + "..." if len(section['content']) > 100 else section['content']
+                })
+            
+            return {
+                'success': True,
+                'total_entries': len(entries),
+                'entries': entries
+            }
+            
+        except Exception as e:
+            logger.error(f"Error listing memory entries for {project_id}: {e}")
+            return {'success': False, 'message': f'Error: {str(e)}'}
+
+    def _rebuild_memory_file(self, project_id: str, sections: List[Dict[str, str]]) -> bool:
+        """重建記憶檔案"""
+        try:
+            memory_file = self.get_memory_file(project_id)
+            
+            if not sections:
+                # 如果沒有條目，刪除檔案
+                if memory_file.exists():
+                    memory_file.unlink()
+                return True
+            
+            # 重建檔案內容
+            content_parts = [f"# AI Memory for {project_id}\n\n"]
+            content_parts.append(f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+            for section in sections:
+                # 重建條目
+                entry_parts = [f"## {section['timestamp']}"]
+                if section['title']:
+                    entry_parts.append(f" - {section['title']}")
+                if section['category']:
+                    entry_parts.append(f" #{section['category']}")
+                
+                entry = "".join(entry_parts) + f"\n\n{section['content']}\n\n---\n\n"
+                content_parts.append(entry)
+            
+            # 寫入檔案
+            with open(memory_file, 'w', encoding='utf-8') as f:
+                f.write("".join(content_parts))
+            
+            logger.info(f"Memory file rebuilt for project: {project_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error rebuilding memory file for {project_id}: {e}")
+            return False
+
     def get_memory_stats(self, project_id: str) -> Dict[str, Any]:
         """取得記憶統計資訊"""
         try:
@@ -454,6 +653,88 @@ class MCPServer:
                     },
                     'required': ['project_id']
                 }
+            },
+            {
+                'name': 'delete_memory_entry',
+                'description': 'Delete specific memory entries based on various criteria',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'entry_id': {
+                            'type': 'string',
+                            'description': 'Entry ID (1-based index) to delete'
+                        },
+                        'timestamp': {
+                            'type': 'string',
+                            'description': 'Timestamp pattern to match for deletion'
+                        },
+                        'title': {
+                            'type': 'string',
+                            'description': 'Title pattern to match for deletion'
+                        },
+                        'category': {
+                            'type': 'string',
+                            'description': 'Category pattern to match for deletion'
+                        },
+                        'content_match': {
+                            'type': 'string',
+                            'description': 'Content pattern to match for deletion'
+                        }
+                    },
+                    'required': ['project_id']
+                }
+            },
+            {
+                'name': 'edit_memory_entry',
+                'description': 'Edit specific memory entry content',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'entry_id': {
+                            'type': 'string',
+                            'description': 'Entry ID (1-based index) to edit'
+                        },
+                        'timestamp': {
+                            'type': 'string',
+                            'description': 'Timestamp pattern to match for editing'
+                        },
+                        'new_title': {
+                            'type': 'string',
+                            'description': 'New title for the entry'
+                        },
+                        'new_category': {
+                            'type': 'string',
+                            'description': 'New category for the entry'
+                        },
+                        'new_content': {
+                            'type': 'string',
+                            'description': 'New content for the entry'
+                        }
+                    },
+                    'required': ['project_id']
+                }
+            },
+            {
+                'name': 'list_memory_entries',
+                'description': 'List all memory entries with their IDs for easy reference',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        }
+                    },
+                    'required': ['project_id']
+                }
             }
         ]
         
@@ -591,6 +872,69 @@ class MCPServer:
                 return self._success_response(
                     f"Memory {'deleted' if success else 'not found'} for project: {arguments['project_id']}"
                 )
+
+            elif tool_name == 'delete_memory_entry':
+                result = self.memory_manager.delete_memory_entry(
+                    arguments['project_id'],
+                    arguments.get('entry_id'),
+                    arguments.get('timestamp'),
+                    arguments.get('title'),
+                    arguments.get('category'),
+                    arguments.get('content_match')
+                )
+                
+                if result['success']:
+                    text = result['message'] + f"\n\nDeleted entries:\n"
+                    for entry in result['deleted_entries']:
+                        text += f"- {entry['timestamp']}"
+                        if entry['title']:
+                            text += f" - {entry['title']}"
+                        text += "\n"
+                    text += f"\nRemaining entries: {result['remaining_count']}"
+                else:
+                    text = result['message']
+                
+                return self._success_response(text)
+
+            elif tool_name == 'edit_memory_entry':
+                result = self.memory_manager.edit_memory_entry(
+                    arguments['project_id'],
+                    arguments.get('entry_id'),
+                    arguments.get('timestamp'),
+                    arguments.get('new_title'),
+                    arguments.get('new_category'),
+                    arguments.get('new_content')
+                )
+                
+                if result['success']:
+                    text = result['message'] + f"\n\nEdited entry:\n"
+                    entry = result['edited_entry']
+                    text += f"- {entry['timestamp']}"
+                    if entry['title']:
+                        text += f" - {entry['title']}"
+                    if entry['category']:
+                        text += f" #{entry['category']}"
+                else:
+                    text = result['message']
+                
+                return self._success_response(text)
+
+            elif tool_name == 'list_memory_entries':
+                result = self.memory_manager.list_memory_entries(arguments['project_id'])
+                
+                if result['success']:
+                    text = f"Memory entries for **{arguments['project_id']}** ({result['total_entries']} entries):\n\n"
+                    for entry in result['entries']:
+                        text += f"**{entry['id']}.** {entry['timestamp']}"
+                        if entry['title']:
+                            text += f" - {entry['title']}"
+                        if entry['category']:
+                            text += f" #{entry['category']}"
+                        text += f"\n   {entry['content_preview']}\n\n"
+                else:
+                    text = result['message']
+                
+                return self._success_response(text)
 
             else:
                 return self._error_response(-32601, f"Unknown tool: {tool_name}")

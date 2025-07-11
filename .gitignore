@@ -40,3 +40,6 @@ Thumbs.db
 
 # Temporary files
 tmp_*
+
+# Personal memory data (should not be committed)
+ai-memory/

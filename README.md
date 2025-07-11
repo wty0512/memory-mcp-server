@@ -8,6 +8,9 @@
 - 🔍 強大的搜尋功能
 - 📊 專案分類管理
 - 🕒 時間戳記跟蹤
+- ✏️ **新功能** 編輯和刪除特定記憶條目
+- 🎯 精確的條目管理（根據ID、時間戳、標題、分類、內容匹配）
+- 📋 條目列表功能，方便查看和管理
 - 🎯 與 Claude Desktop / Claude Code / Cursor / Rovo Dev 完美整合
 - 🚀 支援 Rovo Dev 的 `acli` 命令管理
 - 🐍 純 Python 實作，無額外依賴
@@ -246,6 +249,73 @@ acli rovodev list-mcp
 - `get_recent_memory` - 獲取最近的記憶條目
 - `get_memory_stats` - 獲取記憶統計信息
 - `delete_memory` - 刪除專案記憶（謹慎使用）
+- `🆕 list_memory_entries` - 列出專案中的所有記憶條目（帶ID編號）
+- `🆕 delete_memory_entry` - 刪除特定的記憶條目
+- `🆕 edit_memory_entry` - 編輯特定的記憶條目
+
+## 🆕 新功能使用指南
+
+### 精確的記憶條目管理
+
+#### 1. 列出所有記憶條目
+```
+使用 list_memory_entries 工具查看專案中的所有記憶條目，每個條目都有唯一的ID編號：
+
+參數：
+- project_id: 專案識別碼
+
+範例回應：
+1. 2025-01-15 10:30:00 - 會議記錄 #工作
+   今天的團隊會議討論了新功能開發...
+
+2. 2025-01-15 14:20:00 - 程式碼筆記 #開發
+   實作了新的API端點...
+```
+
+#### 2. 刪除特定記憶條目
+```
+使用 delete_memory_entry 工具可以根據多種條件刪除特定條目：
+
+參數：
+- project_id: 專案識別碼（必需）
+- entry_id: 條目ID（1-based索引）
+- timestamp: 時間戳模式匹配
+- title: 標題模式匹配
+- category: 分類模式匹配
+- content_match: 內容模式匹配
+
+範例：
+- 刪除第2個條目：entry_id="2"
+- 刪除所有包含"測試"分類的條目：category="測試"
+- 刪除標題包含"會議"的條目：title="會議"
+- 刪除特定日期的條目：timestamp="2025-01-15"
+- 刪除內容包含特定關鍵字的條目：content_match="API"
+```
+
+#### 3. 編輯記憶條目
+```
+使用 edit_memory_entry 工具編輯現有條目的內容：
+
+參數：
+- project_id: 專案識別碼（必需）
+- entry_id: 條目ID（1-based索引）
+- timestamp: 時間戳模式匹配（用於查找條目）
+- new_title: 新標題
+- new_category: 新分類
+- new_content: 新內容
+
+範例：
+- 編輯第1個條目的標題：entry_id="1", new_title="更新的標題"
+- 修改條目內容：entry_id="2", new_content="這是更新後的內容"
+- 更改分類：entry_id="3", new_category="已完成"
+```
+
+### 使用建議
+
+1. **先列出條目**：使用 `list_memory_entries` 查看所有條目和它們的ID
+2. **精確刪除**：使用條目ID進行精確刪除，或使用模式匹配批量刪除
+3. **安全編輯**：編輯前建議先備份重要資料
+4. **分類管理**：善用分類功能來組織和管理記憶條目
 
 ## 🚀 部署和整合
 
