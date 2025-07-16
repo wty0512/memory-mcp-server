@@ -1873,19 +1873,30 @@ def main():
         print(f"Python version: {sys.version}")
         print(f"Working directory: {os.getcwd()}")
         print(f"Script path: {__file__}")
+        
+        # 顯示後端特定資訊（不初始化）
+        if args.backend == "sqlite":
+            db_path = Path("ai-memory/memory.db")
+            print(f"SQLite database: {db_path}")
+            print(f"Database exists: {db_path.exists()}")
+        elif args.backend == "markdown":
+            memory_dir = Path(__file__).parent.resolve() / "ai-memory"
+            print(f"Memory directory: {memory_dir}")
+            print(f"Directory exists: {memory_dir.exists()}")
+            
         return
     
-    # 確保輸出是 UTF-8
-    if sys.stdout.encoding != 'utf-8':
-        sys.stdout.reconfigure(encoding='utf-8')
-    
-    # 創建後端
+    # 創建後端（只有實際運行時才初始化）
     try:
         backend = create_backend(args.backend)
         logger.info(f"Using {args.backend} backend")
     except Exception as e:
         logger.error(f"Failed to create backend: {e}")
         sys.exit(1)
+    
+    # 確保輸出是 UTF-8
+    if sys.stdout.encoding != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
     
     # 添加調試資訊
     logger.info(f"Python version: {sys.version}")
