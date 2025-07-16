@@ -12,6 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from abc import ABC, abstractmethod
 
 # 設定日誌
 logging.basicConfig(
@@ -20,7 +21,62 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class MarkdownMemoryManager:
+class MemoryBackend(ABC):
+    """記憶後端抽象基類"""
+    
+    @abstractmethod
+    def save_memory(self, project_id: str, content: str, title: str = "", category: str = "") -> bool:
+        """儲存記憶到後端"""
+        pass
+    
+    @abstractmethod
+    def get_memory(self, project_id: str) -> Optional[str]:
+        """讀取完整專案記憶"""
+        pass
+    
+    @abstractmethod
+    def search_memory(self, project_id: str, query: str, limit: int = 10) -> List[Dict[str, str]]:
+        """搜尋記憶內容"""
+        pass
+    
+    @abstractmethod
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """列出所有專案及其統計資訊"""
+        pass
+    
+    @abstractmethod
+    def get_recent_memory(self, project_id: str, limit: int = 5) -> List[Dict[str, str]]:
+        """取得最近的記憶條目"""
+        pass
+    
+    @abstractmethod
+    def delete_memory(self, project_id: str) -> bool:
+        """刪除專案記憶檔案"""
+        pass
+    
+    @abstractmethod
+    def delete_memory_entry(self, project_id: str, entry_id: str = None, timestamp: str = None, 
+                           title: str = None, category: str = None, content_match: str = None) -> Dict[str, Any]:
+        """刪除特定的記憶條目"""
+        pass
+    
+    @abstractmethod
+    def edit_memory_entry(self, project_id: str, entry_id: str = None, timestamp: str = None,
+                         new_title: str = None, new_category: str = None, new_content: str = None) -> Dict[str, Any]:
+        """編輯特定的記憶條目"""
+        pass
+    
+    @abstractmethod
+    def list_memory_entries(self, project_id: str) -> Dict[str, Any]:
+        """列出專案中的所有記憶條目，帶有索引"""
+        pass
+    
+    @abstractmethod
+    def get_memory_stats(self, project_id: str) -> Dict[str, Any]:
+        """取得記憶統計資訊"""
+        pass
+
+class MarkdownMemoryManager(MemoryBackend):
     """Markdown 記憶管理器"""
     
     def __init__(self, memory_dir: str = "ai-memory"):
@@ -489,8 +545,8 @@ class MarkdownMemoryManager:
 class MCPServer:
     """Model Context Protocol 伺服器"""
     
-    def __init__(self):
-        self.memory_manager = MarkdownMemoryManager()
+    def __init__(self, backend: MemoryBackend = None):
+        self.memory_manager = backend or MarkdownMemoryManager()
         self.version = "1.0.0"
 
     async def handle_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
@@ -1007,17 +1063,61 @@ class MCPServer:
         finally:
             logger.info("Server shutdown complete")
 
-if __name__ == "__main__":
+def create_backend(backend_type: str) -> MemoryBackend:
+    """根據類型創建記憶後端"""
+    if backend_type == "markdown":
+        return MarkdownMemoryManager()
+    elif backend_type == "sqlite":
+        # TODO: 實作 SQLiteBackend
+        raise NotImplementedError("SQLite backend not yet implemented")
+    else:
+        raise ValueError(f"Unknown backend type: {backend_type}")
+
+def main():
+    """主程式入口點"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Markdown Memory MCP Server")
+    parser.add_argument(
+        "--backend", 
+        choices=["markdown", "sqlite"], 
+        default="markdown",
+        help="選擇記憶後端類型 (default: markdown)"
+    )
+    parser.add_argument(
+        "--info", 
+        action="store_true",
+        help="顯示當前配置資訊"
+    )
+    
+    args = parser.parse_args()
+    
+    if args.info:
+        print(f"Markdown Memory MCP Server")
+        print(f"Backend: {args.backend}")
+        print(f"Python version: {sys.version}")
+        print(f"Working directory: {os.getcwd()}")
+        print(f"Script path: {__file__}")
+        return
+    
     # 確保輸出是 UTF-8
     if sys.stdout.encoding != 'utf-8':
         sys.stdout.reconfigure(encoding='utf-8')
+    
+    # 創建後端
+    try:
+        backend = create_backend(args.backend)
+        logger.info(f"Using {args.backend} backend")
+    except Exception as e:
+        logger.error(f"Failed to create backend: {e}")
+        sys.exit(1)
     
     # 添加調試資訊
     logger.info(f"Python version: {sys.version}")
     logger.info(f"Working directory: {os.getcwd()}")
     logger.info(f"Script path: {__file__}")
     
-    server = MCPServer()
+    server = MCPServer(backend)
     try:
         asyncio.run(server.run())
     except KeyboardInterrupt:
@@ -1026,3 +1126,6 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         sys.exit(1)
+
+if __name__ == "__main__":
+    main()
