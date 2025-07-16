@@ -10,11 +10,25 @@ import logging
 import os
 import sys
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+
+# 跨平台檔案鎖定支援
+try:
+    import fcntl  # Unix/Linux/macOS
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
+
+try:
+    import msvcrt  # Windows
+    HAS_MSVCRT = True
+except ImportError:
+    HAS_MSVCRT = False
 
 # 設定日誌
 logging.basicConfig(
@@ -22,6 +36,140 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+class FileLock:
+    """跨平台檔案鎖定工具類"""
+    
+    def __init__(self, file_path: Path, timeout: float = 30.0, retry_delay: float = 0.1):
+        self.file_path = file_path
+        self.timeout = timeout
+        self.retry_delay = retry_delay
+        self.lock_file = None
+        self.locked = False
+    
+    def __enter__(self):
+        self.acquire()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+    
+    def acquire(self):
+        """取得檔案鎖定"""
+        if self.locked:
+            return
+        
+        # 創建鎖定檔案路徑
+        lock_file_path = self.file_path.with_suffix(self.file_path.suffix + '.lock')
+        
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            try:
+                # 嘗試創建鎖定檔案
+                self.lock_file = open(lock_file_path, 'w')
+                
+                if HAS_FCNTL:
+                    # Unix/Linux/macOS 使用 fcntl
+                    fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elif HAS_MSVCRT:
+                    # Windows 使用 msvcrt
+                    msvcrt.locking(self.lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    # 降級方案：使用檔案存在性檢查
+                    if lock_file_path.exists():
+                        raise OSError("Lock file exists")
+                
+                # 寫入鎖定資訊
+                self.lock_file.write(f"Locked by PID {os.getpid()} at {time.time()}\n")
+                self.lock_file.flush()
+                
+                self.locked = True
+                logger.debug(f"Acquired lock for {self.file_path}")
+                return
+                
+            except (OSError, IOError) as e:
+                # 鎖定失敗，清理並重試
+                if self.lock_file:
+                    try:
+                        self.lock_file.close()
+                    except:
+                        pass
+                    self.lock_file = None
+                
+                logger.debug(f"Lock acquisition failed for {self.file_path}: {e}")
+                time.sleep(self.retry_delay)
+                continue
+        
+        # 超時失敗
+        raise TimeoutError(f"Failed to acquire lock for {self.file_path} within {self.timeout} seconds")
+    
+    def release(self):
+        """釋放檔案鎖定"""
+        if not self.locked or not self.lock_file:
+            return
+        
+        try:
+            if HAS_FCNTL:
+                fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_UN)
+            elif HAS_MSVCRT:
+                msvcrt.locking(self.lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            
+            self.lock_file.close()
+            
+            # 刪除鎖定檔案
+            lock_file_path = self.file_path.with_suffix(self.file_path.suffix + '.lock')
+            try:
+                lock_file_path.unlink()
+            except FileNotFoundError:
+                pass
+            
+            logger.debug(f"Released lock for {self.file_path}")
+            
+        except Exception as e:
+            logger.warning(f"Error releasing lock for {self.file_path}: {e}")
+        finally:
+            self.lock_file = None
+            self.locked = False
+
+class AtomicFileWriter:
+    """原子檔案寫入工具類"""
+    
+    def __init__(self, file_path: Path):
+        self.file_path = file_path
+        self.temp_path = file_path.with_suffix(file_path.suffix + '.tmp')
+        self.temp_file = None
+    
+    def __enter__(self):
+        # 確保目錄存在
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 開啟臨時檔案
+        self.temp_file = open(self.temp_path, 'w', encoding='utf-8')
+        return self.temp_file
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.temp_file:
+            self.temp_file.close()
+        
+        if exc_type is None:
+            # 成功：原子性重命名
+            try:
+                self.temp_path.replace(self.file_path)
+                logger.debug(f"Atomic write completed for {self.file_path}")
+            except Exception as e:
+                logger.error(f"Failed to complete atomic write for {self.file_path}: {e}")
+                # 清理臨時檔案
+                try:
+                    self.temp_path.unlink()
+                except FileNotFoundError:
+                    pass
+                raise
+        else:
+            # 失敗：清理臨時檔案
+            try:
+                self.temp_path.unlink()
+            except FileNotFoundError:
+                pass
 
 class MemoryBackend(ABC):
     """記憶後端抽象基類"""
@@ -146,7 +294,7 @@ class MarkdownMemoryManager(MemoryBackend):
             return None
 
     def save_memory(self, project_id: str, content: str, title: str = "", category: str = "") -> bool:
-        """儲存記憶到 markdown 檔案"""
+        """儲存記憶到 markdown 檔案（使用檔案鎖定）"""
         try:
             memory_file = self.get_memory_file(project_id)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -160,19 +308,25 @@ class MarkdownMemoryManager(MemoryBackend):
             
             entry = "".join(entry_parts) + f"\n\n{content}\n\n---\n"
             
-            # 寫入檔案
-            if memory_file.exists():
-                with open(memory_file, 'a', encoding='utf-8') as f:
-                    f.write(entry)
-            else:
-                header = f"# AI Memory for {project_id}\n\n"
-                header += f"Created: {timestamp}\n\n"
-                with open(memory_file, 'w', encoding='utf-8') as f:
-                    f.write(header + entry)
+            # 使用檔案鎖定進行安全寫入
+            with FileLock(memory_file):
+                if memory_file.exists():
+                    # 追加到現有檔案
+                    with open(memory_file, 'a', encoding='utf-8') as f:
+                        f.write(entry)
+                else:
+                    # 創建新檔案（使用原子寫入）
+                    header = f"# AI Memory for {project_id}\n\n"
+                    header += f"Created: {timestamp}\n\n"
+                    with AtomicFileWriter(memory_file) as f:
+                        f.write(header + entry)
             
             logger.info(f"Memory saved for project: {project_id}")
             return True
             
+        except TimeoutError as e:
+            logger.error(f"Timeout acquiring lock for {project_id}: {e}")
+            return False
         except Exception as e:
             logger.error(f"Error saving memory for {project_id}: {e}")
             return False
@@ -309,13 +463,20 @@ class MarkdownMemoryManager(MemoryBackend):
             return []
 
     def delete_memory(self, project_id: str) -> bool:
-        """刪除專案記憶檔案"""
+        """刪除專案記憶檔案（使用檔案鎖定）"""
         try:
             memory_file = self.get_memory_file(project_id)
-            if memory_file.exists():
-                memory_file.unlink()
-                logger.info(f"Memory deleted for project: {project_id}")
-                return True
+            
+            # 使用檔案鎖定進行安全刪除
+            with FileLock(memory_file):
+                if memory_file.exists():
+                    memory_file.unlink()
+                    logger.info(f"Memory deleted for project: {project_id}")
+                    return True
+                return False
+                
+        except TimeoutError as e:
+            logger.error(f"Timeout acquiring lock for deleting {project_id}: {e}")
             return False
         except Exception as e:
             logger.error(f"Error deleting memory for {project_id}: {e}")
@@ -484,38 +645,43 @@ class MarkdownMemoryManager(MemoryBackend):
             return {'success': False, 'message': f'Error: {str(e)}'}
 
     def _rebuild_memory_file(self, project_id: str, sections: List[Dict[str, str]]) -> bool:
-        """重建記憶檔案"""
+        """重建記憶檔案（使用檔案鎖定）"""
         try:
             memory_file = self.get_memory_file(project_id)
             
-            if not sections:
-                # 如果沒有條目，刪除檔案
-                if memory_file.exists():
-                    memory_file.unlink()
-                return True
-            
-            # 重建檔案內容
-            content_parts = [f"# AI Memory for {project_id}\n\n"]
-            content_parts.append(f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            
-            for section in sections:
-                # 重建條目
-                entry_parts = [f"## {section['timestamp']}"]
-                if section['title']:
-                    entry_parts.append(f" - {section['title']}")
-                if section['category']:
-                    entry_parts.append(f" #{section['category']}")
+            # 使用檔案鎖定進行安全重建
+            with FileLock(memory_file):
+                if not sections:
+                    # 如果沒有條目，刪除檔案
+                    if memory_file.exists():
+                        memory_file.unlink()
+                    return True
                 
-                entry = "".join(entry_parts) + f"\n\n{section['content']}\n\n---\n\n"
-                content_parts.append(entry)
-            
-            # 寫入檔案
-            with open(memory_file, 'w', encoding='utf-8') as f:
-                f.write("".join(content_parts))
+                # 重建檔案內容
+                content_parts = [f"# AI Memory for {project_id}\n\n"]
+                content_parts.append(f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                for section in sections:
+                    # 重建條目
+                    entry_parts = [f"## {section['timestamp']}"]
+                    if section['title']:
+                        entry_parts.append(f" - {section['title']}")
+                    if section['category']:
+                        entry_parts.append(f" #{section['category']}")
+                    
+                    entry = "".join(entry_parts) + f"\n\n{section['content']}\n\n---\n\n"
+                    content_parts.append(entry)
+                
+                # 使用原子寫入
+                with AtomicFileWriter(memory_file) as f:
+                    f.write("".join(content_parts))
             
             logger.info(f"Memory file rebuilt for project: {project_id}")
             return True
             
+        except TimeoutError as e:
+            logger.error(f"Timeout acquiring lock for rebuilding {project_id}: {e}")
+            return False
         except Exception as e:
             logger.error(f"Error rebuilding memory file for {project_id}: {e}")
             return False
