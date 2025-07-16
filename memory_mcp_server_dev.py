@@ -9,10 +9,12 @@ import json
 import logging
 import os
 import sys
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 
 # 設定日誌
 logging.basicConfig(
@@ -542,6 +544,614 @@ class MarkdownMemoryManager(MemoryBackend):
             logger.error(f"Error getting memory stats for {project_id}: {e}")
             return {'exists': False, 'error': str(e)}
 
+class SQLiteBackend(MemoryBackend):
+    """SQLite 記憶後端"""
+    
+    def __init__(self, db_path: str = "ai-memory/memory.db"):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_database()
+    
+    @contextmanager
+    def get_connection(self):
+        """取得資料庫連接"""
+        conn = sqlite3.connect(
+            self.db_path,
+            timeout=30.0,
+            check_same_thread=False
+        )
+        conn.row_factory = sqlite3.Row
+        self._configure_connection(conn)
+        try:
+            yield conn
+        finally:
+            conn.close()
+    
+    def _configure_connection(self, conn):
+        """配置連接最佳化參數"""
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=10000")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA foreign_keys=ON")
+    
+    def _init_database(self):
+        """初始化資料庫結構"""
+        with self.get_connection() as conn:
+            # 建立專案表
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 建立記憶條目表
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS memory_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id TEXT NOT NULL,
+                    title TEXT,
+                    category TEXT,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # 建立索引
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_project ON memory_entries(project_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_category ON memory_entries(category)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_created ON memory_entries(created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_updated ON memory_entries(updated_at)")
+            
+            # 建立全文搜尋表
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+                    content,
+                    title,
+                    category,
+                    content='memory_entries',
+                    content_rowid='id'
+                )
+            """)
+            
+            # 建立觸發器維護全文搜尋索引
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memory_entries BEGIN
+                    INSERT INTO memory_fts(rowid, content, title, category) 
+                    VALUES (new.id, new.content, COALESCE(new.title, ''), COALESCE(new.category, ''));
+                END
+            """)
+            
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memory_entries BEGIN
+                    DELETE FROM memory_fts WHERE rowid = old.id;
+                END
+            """)
+            
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS memory_fts_update AFTER UPDATE ON memory_entries BEGIN
+                    DELETE FROM memory_fts WHERE rowid = old.id;
+                    INSERT INTO memory_fts(rowid, content, title, category) 
+                    VALUES (new.id, new.content, COALESCE(new.title, ''), COALESCE(new.category, ''));
+                END
+            """)
+            
+            conn.commit()
+            logger.info(f"SQLite database initialized at: {self.db_path}")
+    
+    def save_memory(self, project_id: str, content: str, title: str = "", category: str = "") -> bool:
+        """儲存記憶到 SQLite 資料庫"""
+        try:
+            with self.get_connection() as conn:
+                # 確保專案存在
+                conn.execute("""
+                    INSERT OR IGNORE INTO projects (id, name) 
+                    VALUES (?, ?)
+                """, (project_id, project_id.replace('-', ' ').title()))
+                
+                # 插入記憶條目
+                conn.execute("""
+                    INSERT INTO memory_entries (project_id, title, category, content)
+                    VALUES (?, ?, ?, ?)
+                """, (project_id, title or None, category or None, content))
+                
+                # 更新專案的 updated_at
+                conn.execute("""
+                    UPDATE projects SET updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                """, (project_id,))
+                
+                conn.commit()
+                logger.info(f"Memory saved for project: {project_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error saving memory for {project_id}: {e}")
+            return False
+    
+    def get_memory(self, project_id: str) -> Optional[str]:
+        """讀取完整專案記憶，轉換為 Markdown 格式"""
+        try:
+            with self.get_connection() as conn:
+                # 取得所有記憶條目
+                cursor = conn.execute("""
+                    SELECT title, category, content, created_at
+                    FROM memory_entries 
+                    WHERE project_id = ?
+                    ORDER BY created_at ASC
+                """, (project_id,))
+                
+                entries = cursor.fetchall()
+                if not entries:
+                    return None
+                
+                # 轉換為 Markdown 格式
+                markdown_parts = [f"# AI Memory for {project_id}\n\n"]
+                
+                for entry in entries:
+                    # 格式化時間戳
+                    timestamp = entry['created_at']
+                    if isinstance(timestamp, str):
+                        # SQLite 返回的可能是字串格式
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            formatted_time = timestamp
+                    else:
+                        formatted_time = timestamp
+                    
+                    # 建立條目標題
+                    header_parts = [f"## {formatted_time}"]
+                    if entry['title']:
+                        header_parts.append(f" - {entry['title']}")
+                    if entry['category']:
+                        header_parts.append(f" #{entry['category']}")
+                    
+                    # 組合條目
+                    entry_md = "".join(header_parts) + f"\n\n{entry['content']}\n\n---\n\n"
+                    markdown_parts.append(entry_md)
+                
+                return "".join(markdown_parts)
+                
+        except Exception as e:
+            logger.error(f"Error reading memory for {project_id}: {e}")
+            return None
+    
+    def search_memory(self, project_id: str, query: str, limit: int = 10) -> List[Dict[str, str]]:
+        """使用 FTS5 搜尋記憶內容"""
+        try:
+            with self.get_connection() as conn:
+                # 使用全文搜尋
+                cursor = conn.execute("""
+                    SELECT me.title, me.category, me.content, me.created_at,
+                           rank
+                    FROM memory_fts 
+                    JOIN memory_entries me ON memory_fts.rowid = me.id
+                    WHERE memory_fts MATCH ? AND me.project_id = ?
+                    ORDER BY rank
+                    LIMIT ?
+                """, (query, project_id, limit))
+                
+                results = []
+                for row in cursor.fetchall():
+                    # 格式化時間戳
+                    timestamp = row['created_at']
+                    if isinstance(timestamp, str):
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            formatted_time = timestamp
+                    else:
+                        formatted_time = str(timestamp)
+                    
+                    content = row['content']
+                    results.append({
+                        'timestamp': formatted_time,
+                        'title': row['title'] or '',
+                        'category': row['category'] or '',
+                        'content': content[:500] + "..." if len(content) > 500 else content,
+                        'relevance': 1  # FTS5 rank 已經排序
+                    })
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"Error searching memory for {project_id}: {e}")
+            return []
+    
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """列出所有專案及其統計資訊"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT p.id, p.name, p.created_at, p.updated_at,
+                           COUNT(me.id) as entries_count,
+                           GROUP_CONCAT(DISTINCT me.category) as categories
+                    FROM projects p
+                    LEFT JOIN memory_entries me ON p.id = me.project_id
+                    GROUP BY p.id, p.name, p.created_at, p.updated_at
+                    ORDER BY p.updated_at DESC
+                """)
+                
+                projects = []
+                for row in cursor.fetchall():
+                    # 處理分類
+                    categories = []
+                    if row['categories']:
+                        categories = [cat.strip() for cat in row['categories'].split(',') if cat.strip()]
+                    
+                    # 格式化時間
+                    updated_at = row['updated_at']
+                    if isinstance(updated_at, str):
+                        try:
+                            dt = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            formatted_time = updated_at
+                    else:
+                        formatted_time = str(updated_at)
+                    
+                    projects.append({
+                        'id': row['id'],
+                        'name': row['name'],
+                        'file_path': f"SQLite: {self.db_path}",
+                        'entries_count': row['entries_count'],
+                        'last_modified': formatted_time,
+                        'categories': categories
+                    })
+                
+                return projects
+                
+        except Exception as e:
+            logger.error(f"Error listing projects: {e}")
+            return []
+    
+    def get_recent_memory(self, project_id: str, limit: int = 5) -> List[Dict[str, str]]:
+        """取得最近的記憶條目"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT title, category, content, created_at
+                    FROM memory_entries 
+                    WHERE project_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (project_id, limit))
+                
+                results = []
+                for row in cursor.fetchall():
+                    # 格式化時間戳
+                    timestamp = row['created_at']
+                    if isinstance(timestamp, str):
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            formatted_time = timestamp
+                    else:
+                        formatted_time = str(timestamp)
+                    
+                    results.append({
+                        'timestamp': formatted_time,
+                        'title': row['title'] or '',
+                        'category': row['category'] or '',
+                        'content': row['content']
+                    })
+                
+                return list(reversed(results))  # 返回時間順序（舊到新）
+                
+        except Exception as e:
+            logger.error(f"Error getting recent memory for {project_id}: {e}")
+            return []
+    
+    def delete_memory(self, project_id: str) -> bool:
+        """刪除專案記憶"""
+        try:
+            with self.get_connection() as conn:
+                # 刪除記憶條目（觸發器會自動清理 FTS）
+                cursor = conn.execute("DELETE FROM memory_entries WHERE project_id = ?", (project_id,))
+                deleted_entries = cursor.rowcount
+                
+                # 刪除專案
+                cursor = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+                deleted_project = cursor.rowcount
+                
+                conn.commit()
+                
+                if deleted_entries > 0 or deleted_project > 0:
+                    logger.info(f"Memory deleted for project: {project_id}")
+                    return True
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error deleting memory for {project_id}: {e}")
+            return False
+    
+    def delete_memory_entry(self, project_id: str, entry_id: str = None, timestamp: str = None, 
+                           title: str = None, category: str = None, content_match: str = None) -> Dict[str, Any]:
+        """刪除特定的記憶條目"""
+        try:
+            with self.get_connection() as conn:
+                # 建立查詢條件
+                where_conditions = ["project_id = ?"]
+                params = [project_id]
+                
+                if entry_id is not None:
+                    try:
+                        where_conditions.append("id = ?")
+                        params.append(int(entry_id))
+                    except ValueError:
+                        return {'success': False, 'message': 'Invalid entry_id format'}
+                
+                if timestamp:
+                    where_conditions.append("created_at LIKE ?")
+                    params.append(f"%{timestamp}%")
+                
+                if title:
+                    where_conditions.append("title LIKE ?")
+                    params.append(f"%{title}%")
+                
+                if category:
+                    where_conditions.append("category LIKE ?")
+                    params.append(f"%{category}%")
+                
+                if content_match:
+                    where_conditions.append("content LIKE ?")
+                    params.append(f"%{content_match}%")
+                
+                # 先查詢要刪除的條目
+                select_sql = f"""
+                    SELECT id, title, created_at FROM memory_entries 
+                    WHERE {' AND '.join(where_conditions)}
+                """
+                cursor = conn.execute(select_sql, params)
+                entries_to_delete = cursor.fetchall()
+                
+                if not entries_to_delete:
+                    return {'success': False, 'message': 'No matching entries found to delete'}
+                
+                # 執行刪除
+                delete_sql = f"DELETE FROM memory_entries WHERE {' AND '.join(where_conditions)}"
+                cursor = conn.execute(delete_sql, params)
+                deleted_count = cursor.rowcount
+                
+                conn.commit()
+                
+                # 格式化回應
+                deleted_entries = []
+                for entry in entries_to_delete:
+                    timestamp = entry['created_at']
+                    if isinstance(timestamp, str):
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            formatted_time = timestamp
+                    else:
+                        formatted_time = str(timestamp)
+                    
+                    deleted_entries.append({
+                        'timestamp': formatted_time,
+                        'title': entry['title'] or ''
+                    })
+                
+                return {
+                    'success': True,
+                    'message': f"Deleted {deleted_count} entries from project {project_id}",
+                    'deleted_count': deleted_count,
+                    'remaining_count': self._count_entries(conn, project_id),
+                    'deleted_entries': deleted_entries
+                }
+                
+        except Exception as e:
+            logger.error(f"Error deleting memory entry for {project_id}: {e}")
+            return {'success': False, 'message': f'Error: {str(e)}'}
+    
+    def edit_memory_entry(self, project_id: str, entry_id: str = None, timestamp: str = None,
+                         new_title: str = None, new_category: str = None, new_content: str = None) -> Dict[str, Any]:
+        """編輯特定的記憶條目"""
+        try:
+            with self.get_connection() as conn:
+                # 建立查詢條件
+                where_conditions = ["project_id = ?"]
+                params = [project_id]
+                
+                if entry_id is not None:
+                    try:
+                        where_conditions.append("id = ?")
+                        params.append(int(entry_id))
+                    except ValueError:
+                        return {'success': False, 'message': 'Invalid entry_id format'}
+                
+                if timestamp:
+                    where_conditions.append("created_at LIKE ?")
+                    params.append(f"%{timestamp}%")
+                
+                # 先查詢條目是否存在
+                select_sql = f"""
+                    SELECT id, title, category, created_at FROM memory_entries 
+                    WHERE {' AND '.join(where_conditions)}
+                    LIMIT 1
+                """
+                cursor = conn.execute(select_sql, params)
+                entry = cursor.fetchone()
+                
+                if not entry:
+                    return {'success': False, 'message': 'No matching entry found to edit'}
+                
+                # 建立更新語句
+                update_fields = []
+                update_params = []
+                
+                if new_title is not None:
+                    update_fields.append("title = ?")
+                    update_params.append(new_title or None)
+                
+                if new_category is not None:
+                    update_fields.append("category = ?")
+                    update_params.append(new_category or None)
+                
+                if new_content is not None:
+                    update_fields.append("content = ?")
+                    update_params.append(new_content)
+                
+                if not update_fields:
+                    return {'success': False, 'message': 'No fields to update'}
+                
+                update_fields.append("updated_at = CURRENT_TIMESTAMP")
+                
+                # 執行更新
+                update_sql = f"""
+                    UPDATE memory_entries 
+                    SET {', '.join(update_fields)}
+                    WHERE {' AND '.join(where_conditions)}
+                """
+                update_params.extend(params)
+                conn.execute(update_sql, update_params)
+                conn.commit()
+                
+                # 取得更新後的條目
+                cursor = conn.execute(select_sql, params)
+                updated_entry = cursor.fetchone()
+                
+                # 格式化時間戳
+                timestamp = updated_entry['created_at']
+                if isinstance(timestamp, str):
+                    try:
+                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        formatted_time = timestamp
+                else:
+                    formatted_time = str(timestamp)
+                
+                return {
+                    'success': True,
+                    'message': f"Successfully edited entry in project {project_id}",
+                    'edited_entry': {
+                        'timestamp': formatted_time,
+                        'title': updated_entry['title'] or '',
+                        'category': updated_entry['category'] or ''
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Error editing memory entry for {project_id}: {e}")
+            return {'success': False, 'message': f'Error: {str(e)}'}
+    
+    def list_memory_entries(self, project_id: str) -> Dict[str, Any]:
+        """列出專案中的所有記憶條目，帶有索引"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT id, title, category, content, created_at
+                    FROM memory_entries 
+                    WHERE project_id = ?
+                    ORDER BY created_at ASC
+                """, (project_id,))
+                
+                entries = []
+                for row in cursor.fetchall():
+                    # 格式化時間戳
+                    timestamp = row['created_at']
+                    if isinstance(timestamp, str):
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            formatted_time = timestamp
+                    else:
+                        formatted_time = str(timestamp)
+                    
+                    content = row['content']
+                    entries.append({
+                        'id': row['id'],
+                        'timestamp': formatted_time,
+                        'title': row['title'] or '',
+                        'category': row['category'] or '',
+                        'content_preview': content[:100] + "..." if len(content) > 100 else content
+                    })
+                
+                return {
+                    'success': True,
+                    'total_entries': len(entries),
+                    'entries': entries
+                }
+                
+        except Exception as e:
+            logger.error(f"Error listing memory entries for {project_id}: {e}")
+            return {'success': False, 'message': f'Error: {str(e)}'}
+    
+    def get_memory_stats(self, project_id: str) -> Dict[str, Any]:
+        """取得記憶統計資訊"""
+        try:
+            with self.get_connection() as conn:
+                # 檢查專案是否存在
+                cursor = conn.execute("SELECT COUNT(*) FROM projects WHERE id = ?", (project_id,))
+                if cursor.fetchone()[0] == 0:
+                    return {'exists': False}
+                
+                # 取得統計資訊
+                cursor = conn.execute("""
+                    SELECT 
+                        COUNT(*) as total_entries,
+                        SUM(LENGTH(content)) as total_characters,
+                        MIN(created_at) as oldest_entry,
+                        MAX(created_at) as latest_entry,
+                        GROUP_CONCAT(DISTINCT category) as categories
+                    FROM memory_entries 
+                    WHERE project_id = ?
+                """, (project_id,))
+                
+                stats = cursor.fetchone()
+                
+                # 處理分類
+                categories = []
+                if stats['categories']:
+                    categories = [cat.strip() for cat in stats['categories'].split(',') if cat.strip()]
+                
+                # 格式化時間
+                def format_timestamp(ts):
+                    if not ts:
+                        return None
+                    if isinstance(ts, str):
+                        try:
+                            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                            return dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            return ts
+                    return str(ts)
+                
+                # 計算字數（簡單估算）
+                total_words = (stats['total_characters'] or 0) // 5
+                
+                return {
+                    'exists': True,
+                    'total_entries': stats['total_entries'],
+                    'total_words': total_words,
+                    'total_characters': stats['total_characters'] or 0,
+                    'categories': categories,
+                    'latest_entry': format_timestamp(stats['latest_entry']),
+                    'oldest_entry': format_timestamp(stats['oldest_entry'])
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting memory stats for {project_id}: {e}")
+            return {'exists': False, 'error': str(e)}
+    
+    def _count_entries(self, conn, project_id: str) -> int:
+        """計算專案的記憶條目數量"""
+        cursor = conn.execute("SELECT COUNT(*) FROM memory_entries WHERE project_id = ?", (project_id,))
+        return cursor.fetchone()[0]
+
 class MCPServer:
     """Model Context Protocol 伺服器"""
     
@@ -1068,8 +1678,7 @@ def create_backend(backend_type: str) -> MemoryBackend:
     if backend_type == "markdown":
         return MarkdownMemoryManager()
     elif backend_type == "sqlite":
-        # TODO: 實作 SQLiteBackend
-        raise NotImplementedError("SQLite backend not yet implemented")
+        return SQLiteBackend()
     else:
         raise ValueError(f"Unknown backend type: {backend_type}")
 
