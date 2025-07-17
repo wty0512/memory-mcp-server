@@ -6,6 +6,15 @@
 - Claude Code 或 Cursor IDE
 - 支援的作業系統：Windows、macOS、Linux
 
+## 後端選擇
+
+本系統支援兩種儲存後端：
+
+- **SQLite**（預設推薦）：高效能資料庫，支援全文搜尋和複雜查詢
+- **Markdown**：人類可讀格式，便於版本控制和手動編輯
+
+系統會自動將現有 Markdown 專案同步到 SQLite，無需手動轉換。
+
 ## 安裝步驟
 
 ### 1. 下載專案
@@ -54,9 +63,9 @@ python3 memory_mcp_server.py --help
 ```json
 {
   "mcpServers": {
-    "markdown-memory": {
+    "memory-server": {
       "command": "python3",
-      "args": ["/absolute/path/to/memory_mcp_server.py"],
+      "args": ["/absolute/path/to/memory_mcp_server.py", "--backend=sqlite"],
       "transport": "stdio",
       "env": {
         "PYTHONPATH": "/absolute/path/to/markdown-memory-mcp"
@@ -72,14 +81,19 @@ python3 memory_mcp_server.py --help
 ```json
 {
   "mcpServers": {
-    "markdown-memory": {
+    "memory-server": {
       "command": "python3",
-      "args": ["./memory_mcp_server.py"],
+      "args": ["./memory_mcp_server.py", "--backend=sqlite"],
       "transport": "stdio"
     }
   }
 }
 ```
+
+#### 後端選項
+- 使用 SQLite（預設推薦）：`--backend=sqlite`
+- 使用 Markdown：`--backend=markdown`
+- 不指定參數時預設使用 Markdown（向後兼容）
 
 ## 驗證安裝
 

@@ -1,16 +1,19 @@
-# Python Markdown Memory MCP Server
+# Python Memory MCP Server
 
-一個基於 Python 的 Model Context Protocol (MCP) 伺服器，使用 Markdown 檔案管理 AI 對話記憶和專案上下文。
+一個基於 Python 的 Model Context Protocol (MCP) 伺服器，提供智能記憶管理功能，支援 SQLite 和 Markdown 雙後端儲存。
 
 ## 🚀 功能特色
 
-- 📝 使用 Markdown 格式儲存和管理記憶
-- 🔍 強大的搜尋功能
-- 📊 專案分類管理
-- 🕒 時間戳記跟蹤
-- ✏️ **新功能** 編輯和刪除特定記憶條目
+- 🗄️ **SQLite 後端**（預設）：高效能資料庫儲存，支援複雜查詢
+- 📝 **Markdown 後端**：人類可讀的檔案格式，便於版本控制
+- 🔄 **智能同步**：自動將 Markdown 專案同步到 SQLite
+- 🔍 強大的搜尋功能（SQLite 支援全文搜尋）
+- 📊 專案分類管理和統計分析
+- 🕒 時間戳記跟蹤和歷史記錄
+- ✏️ 編輯和刪除特定記憶條目
 - 🎯 精確的條目管理（根據ID、時間戳、標題、分類、內容匹配）
 - 📋 條目列表功能，方便查看和管理
+- 🚀 **啟動時自動顯示專案列表**，提升使用體驗
 - 🎯 與 Claude Desktop / Claude Code / Cursor / Rovo Dev 完美整合
 - 🚀 支援 Rovo Dev 的 `acli` 命令管理
 - 🐍 純 Python 實作，無額外依賴
@@ -40,6 +43,9 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 # 設定執行權限（macOS/Linux）
 chmod +x memory_mcp_server.py
 chmod +x start_server.sh
+
+# 🚀 首次啟動會自動同步現有 Markdown 專案到 SQLite
+# 如果您有現有的 Markdown 記憶檔案，系統會自動處理
 ```
 
 ### 3. 設定 Claude Desktop
