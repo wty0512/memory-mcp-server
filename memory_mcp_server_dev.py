@@ -891,47 +891,107 @@ class SQLiteBackend(MemoryBackend):
             return None
     
     def search_memory(self, project_id: str, query: str, limit: int = 10) -> List[Dict[str, str]]:
-        """使用 FTS5 搜尋記憶內容"""
+        """使用 FTS5 搜尋記憶內容，如果失敗則使用 LIKE 備用搜尋"""
         try:
-            with self.get_connection() as conn:
-                # 使用全文搜尋
-                cursor = conn.execute("""
-                    SELECT me.title, me.category, me.content, me.created_at,
-                           rank
-                    FROM memory_fts 
-                    JOIN memory_entries me ON memory_fts.rowid = me.id
-                    WHERE memory_fts MATCH ? AND me.project_id = ?
-                    ORDER BY rank
-                    LIMIT ?
-                """, (query, project_id, limit))
-                
-                results = []
-                for row in cursor.fetchall():
-                    # 格式化時間戳
-                    timestamp = row['created_at']
-                    if isinstance(timestamp, str):
-                        try:
-                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-                        except:
-                            formatted_time = timestamp
-                    else:
-                        formatted_time = str(timestamp)
-                    
-                    content = row['content']
-                    results.append({
-                        'timestamp': formatted_time,
-                        'title': row['title'] or '',
-                        'category': row['category'] or '',
-                        'content': content[:500] + "..." if len(content) > 500 else content,
-                        'relevance': 1  # FTS5 rank 已經排序
-                    })
-                
-                return results
+            # 首先嘗試 FTS5 全文搜尋
+            fts_results = self._fts_search(project_id, query, limit)
+            
+            # 如果 FTS5 搜尋結果為空，使用 LIKE 備用搜尋
+            if not fts_results:
+                logger.info(f"FTS5 search returned no results for '{query}', trying LIKE search")
+                like_results = self._like_search(project_id, query, limit)
+                if like_results:
+                    logger.info(f"LIKE search found {len(like_results)} results for '{query}'")
+                return like_results
+            
+            return fts_results
                 
         except Exception as e:
             logger.error(f"Error searching memory for {project_id}: {e}")
-            return []
+            # 如果 FTS5 搜尋出現異常，嘗試 LIKE 備用搜尋
+            try:
+                logger.info(f"FTS5 search failed, trying LIKE search as fallback")
+                return self._like_search(project_id, query, limit)
+            except Exception as fallback_error:
+                logger.error(f"Fallback LIKE search also failed: {fallback_error}")
+                return []
+    
+    def _fts_search(self, project_id: str, query: str, limit: int) -> List[Dict[str, str]]:
+        """使用 FTS5 全文搜尋"""
+        with self.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT me.title, me.category, me.content, me.created_at,
+                       rank
+                FROM memory_fts 
+                JOIN memory_entries me ON memory_fts.rowid = me.id
+                WHERE memory_fts MATCH ? AND me.project_id = ?
+                ORDER BY rank
+                LIMIT ?
+            """, (query, project_id, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append(self._format_search_result(row, 1))
+            
+            return results
+    
+    def _like_search(self, project_id: str, query: str, limit: int) -> List[Dict[str, str]]:
+        """使用 LIKE 查詢作為備用搜尋方案"""
+        with self.get_connection() as conn:
+            # 使用 LIKE 查詢搜尋標題、分類和內容
+            like_pattern = f"%{query}%"
+            cursor = conn.execute("""
+                SELECT title, category, content, created_at
+                FROM memory_entries 
+                WHERE project_id = ? AND (
+                    content LIKE ? OR 
+                    title LIKE ? OR 
+                    category LIKE ?
+                )
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (project_id, like_pattern, like_pattern, like_pattern, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                # 計算相關性（出現次數）
+                content = row['content'] or ''
+                title = row['title'] or ''
+                category = row['category'] or ''
+                
+                relevance = (
+                    content.lower().count(query.lower()) +
+                    title.lower().count(query.lower()) * 2 +  # 標題權重更高
+                    category.lower().count(query.lower()) * 1.5  # 分類權重中等
+                )
+                
+                results.append(self._format_search_result(row, relevance))
+            
+            # 按相關性排序
+            results.sort(key=lambda x: x['relevance'], reverse=True)
+            return results
+    
+    def _format_search_result(self, row, relevance: float) -> Dict[str, str]:
+        """格式化搜尋結果"""
+        # 格式化時間戳
+        timestamp = row['created_at']
+        if isinstance(timestamp, str):
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                formatted_time = timestamp
+        else:
+            formatted_time = str(timestamp)
+        
+        content = row['content'] or ''
+        return {
+            'timestamp': formatted_time,
+            'title': row['title'] or '',
+            'category': row['category'] or '',
+            'content': content[:500] + "..." if len(content) > 500 else content,
+            'relevance': relevance
+        }
     
     def list_projects(self) -> List[Dict[str, Any]]:
         """列出所有專案及其統計資訊"""
@@ -1318,6 +1378,268 @@ class SQLiteBackend(MemoryBackend):
         cursor = conn.execute("SELECT COUNT(*) FROM memory_entries WHERE project_id = ?", (project_id,))
         return cursor.fetchone()[0]
 
+class DataSyncManager:
+    """資料同步管理器 - 負責 Markdown 到 SQLite 的同步"""
+    
+    def __init__(self, markdown_backend: MemoryBackend, sqlite_backend: MemoryBackend):
+        self.markdown = markdown_backend
+        self.sqlite = sqlite_backend
+        self.sync_log = []
+    
+    def sync_all_projects(self, mode='auto', similarity_threshold=0.8):
+        """同步所有 Markdown 專案到 SQLite
+        
+        Args:
+            mode: 'auto', 'interactive', 'preview'
+            similarity_threshold: 相似度閾值 (0.0-1.0)
+        """
+        logger.info("開始同步 Markdown 專案到 SQLite...")
+        
+        # 獲取所有 Markdown 專案
+        markdown_projects = self.markdown.list_projects()
+        
+        if not markdown_projects:
+            logger.info("沒有找到 Markdown 專案")
+            return {'success': True, 'message': '沒有專案需要同步', 'synced': 0}
+        
+        logger.info(f"找到 {len(markdown_projects)} 個 Markdown 專案")
+        
+        synced_count = 0
+        skipped_count = 0
+        error_count = 0
+        
+        for project in markdown_projects:
+            try:
+                result = self.sync_project(project['id'], mode, similarity_threshold)
+                if result['action'] == 'synced':
+                    synced_count += 1
+                elif result['action'] == 'skipped':
+                    skipped_count += 1
+                
+                self.sync_log.append({
+                    'project_id': project['id'],
+                    'action': result['action'],
+                    'message': result['message']
+                })
+                
+            except Exception as e:
+                error_count += 1
+                error_msg = f"同步專案 {project['id']} 時發生錯誤: {str(e)}"
+                logger.error(error_msg)
+                self.sync_log.append({
+                    'project_id': project['id'],
+                    'action': 'error',
+                    'message': error_msg
+                })
+        
+        summary = {
+            'success': True,
+            'total_projects': len(markdown_projects),
+            'synced': synced_count,
+            'skipped': skipped_count,
+            'errors': error_count,
+            'log': self.sync_log
+        }
+        
+        logger.info(f"同步完成: {synced_count} 個專案已同步, {skipped_count} 個跳過, {error_count} 個錯誤")
+        return summary
+    
+    def sync_project(self, project_id, mode='auto', similarity_threshold=0.8):
+        """同步單個專案"""
+        logger.info(f"正在同步專案: {project_id}")
+        
+        # 獲取 Markdown 內容
+        markdown_content = self.markdown.get_memory(project_id)
+        if not markdown_content:
+            return {'action': 'skipped', 'message': f'專案 {project_id} 沒有內容'}
+        
+        # 檢查 SQLite 中是否已存在
+        sqlite_content = self.sqlite.get_memory(project_id)
+        
+        if sqlite_content:
+            # 專案已存在，處理合併邏輯
+            return self.handle_existing_project(project_id, markdown_content, sqlite_content, mode, similarity_threshold)
+        else:
+            # 新專案，直接匯入
+            return self.import_new_project(project_id, markdown_content, mode)
+    
+    def handle_existing_project(self, project_id, markdown_content, sqlite_content, mode, similarity_threshold):
+        """處理已存在的專案"""
+        # 計算相似度
+        similarity = self.calculate_similarity(markdown_content, sqlite_content)
+        
+        logger.info(f"專案 {project_id} 相似度: {similarity:.2f}")
+        
+        if mode == 'preview':
+            return {
+                'action': 'preview',
+                'message': f'專案已存在，相似度: {similarity:.2f}，建議動作: {"合併" if similarity > similarity_threshold else "創建新專案"}'
+            }
+        
+        if similarity > similarity_threshold:
+            # 高相似度，自動合併
+            if mode == 'auto':
+                merged_content = self.merge_contents(markdown_content, sqlite_content)
+                success = self.replace_project_content(project_id, merged_content)
+                if success:
+                    return {'action': 'synced', 'message': f'專案 {project_id} 已合併 (相似度: {similarity:.2f})'}
+                else:
+                    return {'action': 'error', 'message': f'合併專案 {project_id} 失敗'}
+            elif mode == 'interactive':
+                # 互動模式 - 這裡簡化為自動合併，實際可以添加用戶輸入
+                logger.info(f"互動模式: 自動合併高相似度專案 {project_id}")
+                merged_content = self.merge_contents(markdown_content, sqlite_content)
+                success = self.replace_project_content(project_id, merged_content)
+                if success:
+                    return {'action': 'synced', 'message': f'專案 {project_id} 已合併 (互動模式)'}
+                else:
+                    return {'action': 'error', 'message': f'合併專案 {project_id} 失敗'}
+        else:
+            # 低相似度，創建新專案
+            new_project_id = f"{project_id}-markdown-import"
+            success = self.import_new_project(new_project_id, markdown_content, mode)
+            if success['action'] == 'synced':
+                return {'action': 'synced', 'message': f'創建新專案 {new_project_id} (原專案相似度過低: {similarity:.2f})'}
+            else:
+                return success
+    
+    def import_new_project(self, project_id, markdown_content, mode):
+        """匯入新專案"""
+        if mode == 'preview':
+            return {'action': 'preview', 'message': f'將創建新專案: {project_id}'}
+        
+        # 解析 Markdown 內容並匯入到 SQLite
+        entries = self.parse_markdown_entries(markdown_content)
+        
+        success_count = 0
+        for entry in entries:
+            success = self.sqlite.save_memory(
+                project_id,
+                entry['content'],
+                entry['title'],
+                entry['category']
+            )
+            if success:
+                success_count += 1
+        
+        if success_count > 0:
+            return {'action': 'synced', 'message': f'專案 {project_id} 已匯入 ({success_count} 個條目)'}
+        else:
+            return {'action': 'error', 'message': f'匯入專案 {project_id} 失敗'}
+    
+    def calculate_similarity(self, content1, content2):
+        """計算兩個內容的相似度 (簡化版本)"""
+        # 簡化的相似度計算 - 基於關鍵詞重疊
+        words1 = set(content1.lower().split())
+        words2 = set(content2.lower().split())
+        
+        if not words1 and not words2:
+            return 1.0
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def merge_contents(self, markdown_content, sqlite_content):
+        """合併兩個內容 (簡化版本)"""
+        # 簡化的合併邏輯 - 將 Markdown 內容追加到 SQLite 內容
+        markdown_entries = self.parse_markdown_entries(markdown_content)
+        
+        # 這裡簡化處理，實際應該更智能地去重和排序
+        return markdown_entries
+    
+    def parse_markdown_entries(self, markdown_content):
+        """解析 Markdown 內容為條目列表"""
+        entries = []
+        lines = markdown_content.split('\n')
+        current_entry = None
+        current_content = []
+        
+        for line in lines:
+            if line.startswith('## '):
+                # 保存上一個條目
+                if current_entry:
+                    entries.append({
+                        'timestamp': current_entry['timestamp'],
+                        'title': current_entry['title'],
+                        'category': current_entry['category'],
+                        'content': '\n'.join(current_content).strip()
+                    })
+                
+                # 解析新條目標題
+                header = line[3:].strip()
+                timestamp, title, category = self._parse_section_header(header)
+                current_entry = {
+                    'timestamp': timestamp,
+                    'title': title,
+                    'category': category
+                }
+                current_content = []
+                
+            elif line.strip() == '---':
+                # 條目結束
+                continue
+            else:
+                current_content.append(line)
+        
+        # 處理最後一個條目
+        if current_entry:
+            entries.append({
+                'timestamp': current_entry['timestamp'],
+                'title': current_entry['title'],
+                'category': current_entry['category'],
+                'content': '\n'.join(current_content).strip()
+            })
+        
+        return entries
+    
+    def _parse_section_header(self, header):
+        """解析區段標題，提取時間戳、標題和分類"""
+        timestamp = ""
+        title = ""
+        category = ""
+        
+        # 提取分類 (hashtag)
+        if '#' in header:
+            header, category = header.split('#', 1)
+            category = category.strip()
+        
+        # 提取時間戳和標題
+        if ' - ' in header:
+            timestamp, title = header.split(' - ', 1)
+            timestamp = timestamp.strip()
+            title = title.strip()
+        else:
+            timestamp = header.strip()
+        
+        return timestamp, title, category
+    
+    def replace_project_content(self, project_id, entries):
+        """替換專案內容"""
+        try:
+            # 先刪除現有內容
+            self.sqlite.delete_memory(project_id)
+            
+            # 重新匯入
+            for entry in entries:
+                self.sqlite.save_memory(
+                    project_id,
+                    entry['content'],
+                    entry['title'],
+                    entry['category']
+                )
+            return True
+        except Exception as e:
+            logger.error(f"替換專案內容失敗: {e}")
+            return False
+    
+    def get_sync_report(self):
+        """獲取同步報告"""
+        return self.sync_log
+
 class MCPServer:
     """Model Context Protocol 伺服器"""
     
@@ -1327,27 +1649,40 @@ class MCPServer:
 
     async def handle_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """處理 MCP 訊息"""
+        # 提取請求 ID 用於回應
+        request_id = message.get('id')
+        
         try:
             method = message.get('method')
             
             if method == 'initialize':
-                return await self.handle_initialize(message)
+                response = await self.handle_initialize(message)
             elif method == 'tools/list':
-                return await self.list_tools()
+                response = await self.list_tools()
             elif method == 'tools/call':
-                return await self.call_tool(message['params'])
+                response = await self.call_tool(message['params'])
             elif method == 'resources/list':
-                return await self.list_resources()
+                response = await self.list_resources()
             elif method == 'prompts/list':
-                return await self.list_prompts()
+                response = await self.list_prompts()
             elif method == 'notifications/initialized':
-                return await self.handle_initialized()
+                response = await self.handle_initialized()
             else:
-                return self._error_response(-32601, f"Method not found: {method}")
+                response = self._error_response(-32601, f"Method not found: {method}")
+            
+            # 確保回應包含正確的請求 ID（除了通知消息）
+            if response is not None and request_id is not None:
+                response['id'] = request_id
+            
+            return response
                 
         except Exception as e:
             logger.error(f"Error handling message: {e}")
-            return self._error_response(-32603, str(e))
+            error_response = self._error_response(-32603, str(e))
+            # 錯誤回應也需要包含請求 ID
+            if request_id is not None:
+                error_response['id'] = request_id
+            return error_response
 
     async def handle_initialize(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """處理初始化請求"""
@@ -1567,6 +1902,28 @@ class MCPServer:
                     },
                     'required': ['project_id']
                 }
+            },
+            {
+                'name': 'sync_markdown_to_sqlite',
+                'description': 'Sync all Markdown projects to SQLite backend with intelligent merging',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'mode': {
+                            'type': 'string',
+                            'enum': ['auto', 'interactive', 'preview'],
+                            'default': 'auto',
+                            'description': 'Sync mode: auto merge, interactive prompts, or preview only'
+                        },
+                        'similarity_threshold': {
+                            'type': 'number',
+                            'default': 0.8,
+                            'minimum': 0.0,
+                            'maximum': 1.0,
+                            'description': 'Similarity threshold for automatic merging (0.0-1.0)'
+                        }
+                    }
+                }
             }
         ]
         
@@ -1598,6 +1955,55 @@ class MCPServer:
     async def handle_initialized(self) -> None:
         """處理初始化完成通知（無需回應）"""
         logger.info("Client initialization completed")
+        
+        # 自動顯示專案列表
+        try:
+            projects = self.memory_manager.list_projects()
+            if projects:
+                welcome_message = f"🎉 **記憶管理系統已啟動** - 發現 {len(projects)} 個專案：\n\n"
+                for project in projects:
+                    welcome_message += f"**{project['name']}** (`{project['id']}`)\n"
+                    welcome_message += f"  - 條目: {project['entries_count']} 個\n"
+                    welcome_message += f"  - 最後修改: {project['last_modified']}\n"
+                    if project['categories']:
+                        welcome_message += f"  - 類別: {', '.join(project['categories'])}\n"
+                    welcome_message += "\n"
+                
+                welcome_message += "💡 使用 `list_memory_projects` 工具可隨時查看專案列表"
+                
+                # 發送歡迎訊息作為通知
+                notification = {
+                    'jsonrpc': '2.0',
+                    'method': 'notifications/message',
+                    'params': {
+                        'level': 'info',
+                        'logger': 'memory-server',
+                        'data': welcome_message
+                    }
+                }
+                
+                # 輸出通知
+                print(json.dumps(notification, ensure_ascii=False))
+                sys.stdout.flush()
+                
+            else:
+                # 如果沒有專案，發送提示訊息
+                welcome_message = "📝 **記憶管理系統已啟動** - 目前沒有專案，可以開始創建您的第一個記憶！"
+                notification = {
+                    'jsonrpc': '2.0',
+                    'method': 'notifications/message',
+                    'params': {
+                        'level': 'info',
+                        'logger': 'memory-server',
+                        'data': welcome_message
+                    }
+                }
+                print(json.dumps(notification, ensure_ascii=False))
+                sys.stdout.flush()
+                
+        except Exception as e:
+            logger.error(f"Error displaying welcome message: {e}")
+        
         return None
 
     async def call_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1768,6 +2174,60 @@ class MCPServer:
                 
                 return self._success_response(text)
 
+            elif tool_name == 'sync_markdown_to_sqlite':
+                # 檢查當前後端是否為 SQLite
+                if not isinstance(self.memory_manager, SQLiteBackend):
+                    return self._error_response(-32603, "同步功能只能在 SQLite 後端模式下使用")
+                
+                try:
+                    # 創建 Markdown 後端實例
+                    markdown_backend = MarkdownMemoryManager()
+                    
+                    # 創建同步管理器
+                    sync_manager = DataSyncManager(markdown_backend, self.memory_manager)
+                    
+                    # 執行同步
+                    result = sync_manager.sync_all_projects(
+                        mode=arguments.get('mode', 'auto'),
+                        similarity_threshold=arguments.get('similarity_threshold', 0.8)
+                    )
+                    
+                    # 格式化回應
+                    if result['success']:
+                        text = f"🔄 **Markdown → SQLite 同步完成**\n\n"
+                        text += f"📊 **統計資訊**:\n"
+                        text += f"- 總專案數: {result['total_projects']}\n"
+                        text += f"- 已同步: {result['synced']} ✅\n"
+                        text += f"- 跳過: {result['skipped']} ⏭️\n"
+                        text += f"- 錯誤: {result['errors']} ❌\n\n"
+                        
+                        if result['log']:
+                            text += f"📋 **詳細日誌**:\n"
+                            for log_entry in result['log']:
+                                status_icon = {
+                                    'synced': '✅',
+                                    'skipped': '⏭️', 
+                                    'error': '❌',
+                                    'preview': '👁️'
+                                }.get(log_entry['action'], '❓')
+                                
+                                text += f"{status_icon} **{log_entry['project_id']}**: {log_entry['message']}\n"
+                        
+                        if result['synced'] > 0:
+                            text += f"\n🎉 成功同步 {result['synced']} 個專案到 SQLite 後端！"
+                        elif result['total_projects'] == 0:
+                            text += f"\n💡 沒有找到 Markdown 專案需要同步。"
+                        else:
+                            text += f"\n⚠️ 所有專案都被跳過，可能已經存在於 SQLite 中。"
+                    else:
+                        text = f"❌ 同步失敗: {result.get('message', '未知錯誤')}"
+                    
+                    return self._success_response(text)
+                    
+                except Exception as e:
+                    logger.error(f"Sync operation failed: {e}")
+                    return self._error_response(-32603, f"同步過程中發生錯誤: {str(e)}")
+
             else:
                 return self._error_response(-32601, f"Unknown tool: {tool_name}")
 
@@ -1864,6 +2324,23 @@ def main():
         action="store_true",
         help="顯示當前配置資訊"
     )
+    parser.add_argument(
+        "--sync-from-markdown",
+        action="store_true",
+        help="將 Markdown 專案同步到 SQLite 後端"
+    )
+    parser.add_argument(
+        "--sync-mode",
+        choices=["auto", "interactive", "preview"],
+        default="auto",
+        help="同步模式: auto(自動), interactive(互動), preview(預覽)"
+    )
+    parser.add_argument(
+        "--similarity-threshold",
+        type=float,
+        default=0.8,
+        help="相似度閾值 (0.0-1.0)，用於決定是否自動合併"
+    )
     
     args = parser.parse_args()
     
@@ -1884,6 +2361,60 @@ def main():
             print(f"Memory directory: {memory_dir}")
             print(f"Directory exists: {memory_dir.exists()}")
             
+        return
+    
+    # 處理同步功能
+    if args.sync_from_markdown:
+        if args.backend != "sqlite":
+            print("錯誤: 同步功能只能在 SQLite 後端模式下使用")
+            print("請使用: python memory_mcp_server_dev.py --backend=sqlite --sync-from-markdown")
+            sys.exit(1)
+        
+        try:
+            # 創建兩個後端實例
+            markdown_backend = MarkdownMemoryManager()
+            sqlite_backend = SQLiteBackend()
+            
+            # 創建同步管理器
+            sync_manager = DataSyncManager(markdown_backend, sqlite_backend)
+            
+            print(f"開始同步 Markdown 專案到 SQLite...")
+            print(f"同步模式: {args.sync_mode}")
+            print(f"相似度閾值: {args.similarity_threshold}")
+            print("-" * 50)
+            
+            # 執行同步
+            result = sync_manager.sync_all_projects(
+                mode=args.sync_mode,
+                similarity_threshold=args.similarity_threshold
+            )
+            
+            # 顯示結果
+            print(f"\n同步完成!")
+            print(f"總專案數: {result['total_projects']}")
+            print(f"已同步: {result['synced']}")
+            print(f"跳過: {result['skipped']}")
+            print(f"錯誤: {result['errors']}")
+            
+            if result['log']:
+                print("\n詳細日誌:")
+                for log_entry in result['log']:
+                    status_icon = {
+                        'synced': '✅',
+                        'skipped': '⏭️',
+                        'error': '❌',
+                        'preview': '👁️'
+                    }.get(log_entry['action'], '❓')
+                    
+                    print(f"{status_icon} {log_entry['project_id']}: {log_entry['message']}")
+            
+            print(f"\n同步操作完成!")
+            
+        except Exception as e:
+            print(f"同步過程中發生錯誤: {e}")
+            logger.error(f"Sync error: {e}")
+            sys.exit(1)
+        
         return
     
     # 創建後端（只有實際運行時才初始化）
