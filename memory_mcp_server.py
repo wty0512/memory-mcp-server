@@ -766,6 +766,55 @@ class MCPServer:
     async def handle_initialized(self) -> None:
         """處理初始化完成通知（無需回應）"""
         logger.info("Client initialization completed")
+        
+        # 自動顯示專案列表
+        try:
+            projects = self.memory_manager.list_projects()
+            if projects:
+                welcome_message = f"🎉 **記憶管理系統已啟動** - 發現 {len(projects)} 個專案：\n\n"
+                for project in projects:
+                    welcome_message += f"**{project['name']}** (`{project['id']}`)\n"
+                    welcome_message += f"  - 條目: {project['entries_count']} 個\n"
+                    welcome_message += f"  - 最後修改: {project['last_modified']}\n"
+                    if project['categories']:
+                        welcome_message += f"  - 類別: {', '.join(project['categories'])}\n"
+                    welcome_message += "\n"
+                
+                welcome_message += "💡 使用 `list_memory_projects` 工具可隨時查看專案列表"
+                
+                # 發送歡迎訊息作為通知
+                notification = {
+                    'jsonrpc': '2.0',
+                    'method': 'notifications/message',
+                    'params': {
+                        'level': 'info',
+                        'logger': 'memory-server',
+                        'data': welcome_message
+                    }
+                }
+                
+                # 輸出通知
+                print(json.dumps(notification, ensure_ascii=False))
+                sys.stdout.flush()
+                
+            else:
+                # 如果沒有專案，發送提示訊息
+                welcome_message = "📝 **記憶管理系統已啟動** - 目前沒有專案，可以開始創建您的第一個記憶！"
+                notification = {
+                    'jsonrpc': '2.0',
+                    'method': 'notifications/message',
+                    'params': {
+                        'level': 'info',
+                        'logger': 'memory-server',
+                        'data': welcome_message
+                    }
+                }
+                print(json.dumps(notification, ensure_ascii=False))
+                sys.stdout.flush()
+                
+        except Exception as e:
+            logger.error(f"Error displaying welcome message: {e}")
+        
         return None
 
     async def call_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
