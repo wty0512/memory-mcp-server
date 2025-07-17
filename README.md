@@ -1,51 +1,72 @@
 # Python Memory MCP Server
+# Python 記憶管理 MCP 伺服器
 
 一個基於 Python 的 Model Context Protocol (MCP) 伺服器，提供智能記憶管理功能，支援 SQLite 和 Markdown 雙後端儲存。
 
-## 🚀 功能特色
+A Python-based Model Context Protocol (MCP) server providing intelligent memory management with SQLite and Markdown dual backend storage support.
 
-- 🗄️ **SQLite 後端**（預設）：高效能資料庫儲存，支援複雜查詢
-- 📝 **Markdown 後端**：人類可讀的檔案格式，便於版本控制
-- 🔄 **智能同步**：自動將 Markdown 專案同步到 SQLite
-- 🔍 強大的搜尋功能（SQLite 支援全文搜尋）
-- 📊 專案分類管理和統計分析
-- 🕒 時間戳記跟蹤和歷史記錄
-- ✏️ 編輯和刪除特定記憶條目
-- 🎯 精確的條目管理（根據ID、時間戳、標題、分類、內容匹配）
-- 📋 條目列表功能，方便查看和管理
-- 🚀 **啟動時自動顯示專案列表**，提升使用體驗
-- 🎯 與 Claude Desktop / Claude Code / Cursor / Rovo Dev 完美整合
-- 🚀 支援 Rovo Dev 的 `acli` 命令管理
-- 🐍 純 Python 實作，無額外依賴
+**[English Version / 英文版本](README_EN.md)**
 
-## 🛠️ 安裝和設定
+## 🚀 功能特色 / Features
 
-### 1. 環境需求
+- 🗄️ **SQLite 後端**（預設）：高效能資料庫儲存，支援複雜查詢  
+  **SQLite Backend** (Default): High-performance database storage with complex query support
+- 📝 **Markdown 後端**：人類可讀的檔案格式，便於版本控制  
+  **Markdown Backend**: Human-readable file format, version control friendly
+- 🔄 **智能同步**：自動將 Markdown 專案同步到 SQLite  
+  **Intelligent Sync**: Automatically sync Markdown projects to SQLite
+- 🔍 強大的搜尋功能（SQLite 支援全文搜尋）  
+  Powerful search functionality (SQLite supports full-text search)
+- 📊 專案分類管理和統計分析  
+  Project categorization and statistical analysis
+- 🕒 時間戳記跟蹤和歷史記錄  
+  Timestamp tracking and history records
+- ✏️ 編輯和刪除特定記憶條目  
+  Edit and delete specific memory entries
+- 🎯 精確的條目管理（根據ID、時間戳、標題、分類、內容匹配）  
+  Precise entry management (by ID, timestamp, title, category, content matching)
+- 📋 條目列表功能，方便查看和管理  
+  Entry listing functionality for easy viewing and management
+- 🚀 **啟動時自動顯示專案列表**，提升使用體驗  
+  **Auto project list display on startup** for enhanced user experience
+- 🎯 與 Claude Desktop / Claude Code / Cursor / Rovo Dev 完美整合  
+  Perfect integration with Claude Desktop / Claude Code / Cursor / Rovo Dev
+- 🚀 支援 Rovo Dev 的 `acli` 命令管理  
+  Support for Rovo Dev's `acli` command management
+- 🐍 純 Python 實作，無額外依賴  
+  Pure Python implementation with no additional dependencies
+
+## 🛠️ 安裝和設定 / Installation and Setup
+
+### 1. 環境需求 / System Requirements
 
 - Python 3.8+
-- Claude Code 或 Cursor IDE
-- 作業系統：Windows、macOS、Linux
+- Claude Code 或 Cursor IDE / Claude Code or Cursor IDE
+- 作業系統：Windows、macOS、Linux / Operating Systems: Windows, macOS, Linux
 
-### 2. 快速安裝
+### 2. 快速安裝 / Quick Installation
 
 ```bash
-# 克隆專案
+# 克隆專案 / Clone the project
 git clone https://github.com/wty0512/markdown-memory-mcp-server.git
 cd markdown-memory-mcp-server
 
-# 創建虛擬環境（可選但推薦）
+# 創建虛擬環境（可選但推薦）/ Create virtual environment (optional but recommended)
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # 檢查依賴（目前使用 Python 標準庫，無需額外依賴）
-# pip install -r requirements.txt  # 目前無需執行此步驟
+# Check dependencies (currently uses Python standard library, no additional dependencies needed)
+# pip install -r requirements.txt  # 目前無需執行此步驟 / Currently not needed
 
-# 設定執行權限（macOS/Linux）
+# 設定執行權限（macOS/Linux）/ Set execution permissions (macOS/Linux)
 chmod +x memory_mcp_server.py
 chmod +x start_server.sh
 
 # 🚀 首次啟動會自動同步現有 Markdown 專案到 SQLite
+# 🚀 First startup will automatically sync existing Markdown projects to SQLite
 # 如果您有現有的 Markdown 記憶檔案，系統會自動處理
+# If you have existing Markdown memory files, the system will handle them automatically
 ```
 
 ### 3. 設定 Claude Desktop

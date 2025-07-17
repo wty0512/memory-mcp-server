@@ -2,6 +2,19 @@
 """
 Python Memory MCP Server
 一個基於 Python 的 Model Context Protocol 伺服器，提供智能記憶管理功能，支援 SQLite 和 Markdown 雙後端儲存
+
+A Python-based Model Context Protocol server providing intelligent memory management 
+with SQLite and Markdown dual backend storage support.
+
+Features / 功能特色:
+- SQLite Backend (Default): High-performance database with full-text search
+  SQLite 後端（預設）：高效能資料庫，支援全文搜尋
+- Markdown Backend: Human-readable format for version control
+  Markdown 後端：人類可讀格式，便於版本控制
+- Intelligent Sync: Auto-sync Markdown projects to SQLite
+  智能同步：自動將 Markdown 專案同步到 SQLite
+- Auto Project Display: Show project list on startup
+  自動專案顯示：啟動時顯示專案列表
 """
 
 import asyncio
@@ -172,7 +185,13 @@ class AtomicFileWriter:
                 pass
 
 class MemoryBackend(ABC):
-    """記憶後端抽象基類"""
+    """
+    記憶後端抽象基類
+    Abstract base class for memory backends
+    
+    定義所有記憶後端必須實作的介面方法
+    Defines interface methods that all memory backends must implement
+    """
     
     @abstractmethod
     def save_memory(self, project_id: str, content: str, title: str = "", category: str = "") -> bool:
@@ -227,7 +246,13 @@ class MemoryBackend(ABC):
         pass
 
 class MarkdownMemoryManager(MemoryBackend):
-    """Markdown 記憶管理器"""
+    """
+    Markdown 記憶管理器
+    Markdown Memory Manager
+    
+    使用 Markdown 檔案格式儲存和管理 AI 記憶，支援檔案鎖定和原子寫入
+    Stores and manages AI memory using Markdown file format with file locking and atomic writes
+    """
     
     def __init__(self, memory_dir: str = "ai-memory"):
         # 總是使用腳本所在目錄作為基準，確保路徑穩定性
@@ -711,7 +736,19 @@ class MarkdownMemoryManager(MemoryBackend):
             return {'exists': False, 'error': str(e)}
 
 class SQLiteBackend(MemoryBackend):
-    """SQLite 記憶後端"""
+    """
+    SQLite 記憶後端
+    SQLite Memory Backend
+    
+    使用 SQLite 資料庫儲存和管理 AI 記憶，支援全文搜尋和高效能查詢
+    Stores and manages AI memory using SQLite database with full-text search and high-performance queries
+    
+    Features / 功能:
+    - FTS5 全文搜尋 / FTS5 full-text search
+    - 事務安全 / Transaction safety  
+    - 索引優化 / Index optimization
+    - 自動備份 / Automatic backup
+    """
     
     def __init__(self, db_path: str = "ai-memory/memory.db"):
         self.db_path = Path(db_path)
@@ -1379,7 +1416,18 @@ class SQLiteBackend(MemoryBackend):
         return cursor.fetchone()[0]
 
 class DataSyncManager:
-    """資料同步管理器 - 負責 Markdown 到 SQLite 的同步"""
+    """
+    資料同步管理器 - 負責 Markdown 到 SQLite 的同步
+    Data Sync Manager - Handles Markdown to SQLite synchronization
+    
+    提供智能同步功能，包括相似度檢測、內容合併和衝突解決
+    Provides intelligent sync features including similarity detection, content merging, and conflict resolution
+    
+    Sync Modes / 同步模式:
+    - auto: 自動合併 / Automatic merging
+    - interactive: 互動式選擇 / Interactive selection  
+    - preview: 預覽模式 / Preview mode
+    """
     
     def __init__(self, markdown_backend: MemoryBackend, sqlite_backend: MemoryBackend):
         self.markdown = markdown_backend
@@ -1641,7 +1689,19 @@ class DataSyncManager:
         return self.sync_log
 
 class MCPServer:
-    """Model Context Protocol 伺服器"""
+    """
+    Model Context Protocol 伺服器
+    Model Context Protocol Server
+    
+    實作 MCP 協議的伺服器，提供記憶管理工具給 AI 助手使用
+    Implements MCP protocol server providing memory management tools for AI assistants
+    
+    Capabilities / 功能:
+    - 工具調用 / Tool invocation
+    - 記憶管理 / Memory management  
+    - 專案同步 / Project synchronization
+    - 啟動時專案顯示 / Startup project display
+    """
     
     def __init__(self, backend: MemoryBackend = None):
         self.memory_manager = backend or MarkdownMemoryManager()
@@ -1705,7 +1765,7 @@ class MCPServer:
         tools = [
             {
                 'name': 'save_project_memory',
-                'description': 'Save information to project-specific markdown memory with optional title and category',
+                'description': '儲存資訊到專案記憶 / Save information to project-specific memory with optional title and category',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -1731,7 +1791,7 @@ class MCPServer:
             },
             {
                 'name': 'get_project_memory',
-                'description': 'Get full project memory content for a project',
+                'description': '取得完整專案記憶內容 / Get full project memory content',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -1745,7 +1805,7 @@ class MCPServer:
             },
             {
                 'name': 'search_project_memory',
-                'description': 'Search project memory for specific content',
+                'description': '搜尋專案記憶內容 / Search project memory for specific content',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -1768,7 +1828,7 @@ class MCPServer:
             },
             {
                 'name': 'list_memory_projects',
-                'description': 'List all projects with memory and their statistics',
+                'description': '列出所有記憶專案及統計資訊 / List all projects with memory and their statistics',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {}
@@ -1905,7 +1965,7 @@ class MCPServer:
             },
             {
                 'name': 'sync_markdown_to_sqlite',
-                'description': 'Sync all Markdown projects to SQLite backend with intelligent merging',
+                'description': '同步 Markdown 專案到 SQLite / Sync all Markdown projects to SQLite backend with intelligent merging',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -1956,20 +2016,24 @@ class MCPServer:
         """處理初始化完成通知（無需回應）"""
         logger.info("Client initialization completed")
         
-        # 自動顯示專案列表
+        # 自動顯示專案列表 / Auto display project list
         try:
             projects = self.memory_manager.list_projects()
             if projects:
-                welcome_message = f"🎉 **記憶管理系統已啟動** - 發現 {len(projects)} 個專案：\n\n"
+                welcome_message = f"""🎉 **記憶管理系統已啟動 / Memory Management System Started**
+發現 {len(projects)} 個專案 / Found {len(projects)} projects:
+
+"""
                 for project in projects:
                     welcome_message += f"**{project['name']}** (`{project['id']}`)\n"
-                    welcome_message += f"  - 條目: {project['entries_count']} 個\n"
-                    welcome_message += f"  - 最後修改: {project['last_modified']}\n"
+                    welcome_message += f"  - 條目 / Entries: {project['entries_count']} 個\n"
+                    welcome_message += f"  - 最後修改 / Last Modified: {project['last_modified']}\n"
                     if project['categories']:
-                        welcome_message += f"  - 類別: {', '.join(project['categories'])}\n"
+                        welcome_message += f"  - 類別 / Categories: {', '.join(project['categories'])}\n"
                     welcome_message += "\n"
                 
-                welcome_message += "💡 使用 `list_memory_projects` 工具可隨時查看專案列表"
+                welcome_message += """💡 使用 `list_memory_projects` 工具可隨時查看專案列表
+💡 Use `list_memory_projects` tool to view project list anytime"""
                 
                 # 發送歡迎訊息作為通知
                 notification = {
@@ -1987,8 +2051,13 @@ class MCPServer:
                 sys.stdout.flush()
                 
             else:
-                # 如果沒有專案，發送提示訊息
-                welcome_message = "📝 **記憶管理系統已啟動** - 目前沒有專案，可以開始創建您的第一個記憶！"
+                # 如果沒有專案，發送提示訊息 / If no projects, send guidance message
+                welcome_message = """📝 **記憶管理系統已啟動 / Memory Management System Started**
+目前沒有專案，可以開始創建您的第一個記憶！
+No projects found. You can start creating your first memory!
+
+💡 使用 `save_project_memory` 工具開始記錄
+💡 Use `save_project_memory` tool to start recording"""
                 notification = {
                     'jsonrpc': '2.0',
                     'method': 'notifications/message',
