@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Markdown Memory MCP Server
-一個基於 Python 的 Model Context Protocol 伺服器，使用 Markdown 檔案管理 AI 記憶
+Python Memory MCP Server
+一個基於 Python 的 Model Context Protocol 伺服器，提供智能記憶管理功能，支援 SQLite 和 Markdown 雙後端儲存
 """
 
 import asyncio
