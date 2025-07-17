@@ -7,6 +7,7 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
 - 🗄️ **SQLite Backend** (Default): High-performance database storage with complex query support
 - 📝 **Markdown Backend**: Human-readable file format, version control friendly
 - 🔄 **Intelligent Sync**: Automatically sync Markdown projects to SQLite
+- 📤 **Multi-format Export**: Support export to Markdown, JSON, CSV, TXT formats
 - 🔍 Powerful search functionality (SQLite supports full-text search)
 - 📊 Project categorization and statistical analysis
 - 🕒 Timestamp tracking and history records
@@ -169,6 +170,7 @@ Global configuration in `~/.cursor/mcp.json`:
 | `edit_project_memory_entry` | Edit specific memory entries |
 | `list_project_memory_entries` | List all entries with IDs |
 | `sync_markdown_to_sqlite` | Sync Markdown projects to SQLite |
+| `export_project_memory` | Export project memory to multiple formats |
 
 ## 🔍 Troubleshooting
 

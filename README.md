@@ -15,6 +15,8 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
   **Markdown Backend**: Human-readable file format, version control friendly
 - 🔄 **智能同步**：自動將 Markdown 專案同步到 SQLite  
   **Intelligent Sync**: Automatically sync Markdown projects to SQLite
+- 📤 **多格式匯出**：支援 Markdown、JSON、CSV、TXT 格式匯出  
+  **Multi-format Export**: Support export to Markdown, JSON, CSV, TXT formats
 - 🔍 強大的搜尋功能（SQLite 支援全文搜尋）  
   Powerful search functionality (SQLite supports full-text search)
 - 📊 專案分類管理和統計分析  
@@ -279,6 +281,7 @@ acli rovodev list-mcp
 - `🆕 list_memory_entries` - 列出專案中的所有記憶條目（帶ID編號）
 - `🆕 delete_memory_entry` - 刪除特定的記憶條目
 - `🆕 edit_memory_entry` - 編輯特定的記憶條目
+- `📤 export_project_memory` - 匯出專案記憶為多種格式（Markdown、JSON、CSV、TXT）
 
 ## 🆕 新功能使用指南
 
@@ -337,12 +340,34 @@ acli rovodev list-mcp
 - 更改分類：entry_id="3", new_category="已完成"
 ```
 
+#### 4. 匯出專案記憶
+```
+使用 export_project_memory 工具將專案記憶匯出為不同格式：
+
+參數：
+- project_id: 專案識別碼（必需）
+- format: 匯出格式（可選，預設：markdown）
+  - "markdown" - Markdown 格式，保持原始格式
+  - "json" - JSON 格式，結構化資料
+  - "csv" - CSV 格式，適合數據分析
+  - "txt" - 純文字格式，移除標記
+- output_path: 輸出檔案路徑（可選，不指定則直接顯示內容）
+- include_metadata: 是否包含元數據（可選，預設：true）
+
+範例：
+- 預設 Markdown 格式：export_project_memory(project_id="my-project")
+- 匯出為 JSON 檔案：export_project_memory(project_id="my-project", format="json", output_path="backup.json")
+- 匯出為 CSV：export_project_memory(project_id="my-project", format="csv")
+- 純文字格式：export_project_memory(project_id="my-project", format="txt", include_metadata=false)
+```
+
 ### 使用建議
 
 1. **先列出條目**：使用 `list_memory_entries` 查看所有條目和它們的ID
 2. **精確刪除**：使用條目ID進行精確刪除，或使用模式匹配批量刪除
 3. **安全編輯**：編輯前建議先備份重要資料
 4. **分類管理**：善用分類功能來組織和管理記憶條目
+5. **📤 定期備份**：使用匯出功能定期備份重要專案記憶
 
 ## 🚀 部署和整合
 

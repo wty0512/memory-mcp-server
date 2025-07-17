@@ -1984,6 +1984,35 @@ class MCPServer:
                         }
                     }
                 }
+            },
+            {
+                'name': 'export_project_memory',
+                'description': '匯出專案記憶 / Export project memory to various formats',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier to export'
+                        },
+                        'format': {
+                            'type': 'string',
+                            'enum': ['markdown', 'json', 'csv', 'txt'],
+                            'default': 'markdown',
+                            'description': 'Export format (default: markdown)'
+                        },
+                        'output_path': {
+                            'type': 'string',
+                            'description': 'Optional output file path (if not provided, returns content as text)'
+                        },
+                        'include_metadata': {
+                            'type': 'boolean',
+                            'default': true,
+                            'description': 'Include metadata like timestamps and categories'
+                        }
+                    },
+                    'required': ['project_id']
+                }
             }
         ]
         
@@ -2297,6 +2326,72 @@ No projects found. You can start creating your first memory!
                     logger.error(f"Sync operation failed: {e}")
                     return self._error_response(-32603, f"同步過程中發生錯誤: {str(e)}")
 
+            elif tool_name == 'export_project_memory':
+                try:
+                    project_id = arguments['project_id']
+                    export_format = arguments.get('format', 'markdown')
+                    output_path = arguments.get('output_path')
+                    include_metadata = arguments.get('include_metadata', True)
+                    
+                    # 獲取專案記憶內容
+                    memory_content = self.memory_manager.get_memory(project_id)
+                    if not memory_content:
+                        return self._error_response(-32603, f"No memory found for project: {project_id}")
+                    
+                    # 獲取專案統計資訊
+                    stats = self.memory_manager.get_memory_stats(project_id)
+                    
+                    # 根據格式匯出
+                    if export_format == 'markdown':
+                        exported_content = self._export_to_markdown(project_id, memory_content, stats, include_metadata)
+                    elif export_format == 'json':
+                        exported_content = self._export_to_json(project_id, memory_content, stats, include_metadata)
+                    elif export_format == 'csv':
+                        exported_content = self._export_to_csv(project_id, memory_content, stats, include_metadata)
+                    elif export_format == 'txt':
+                        exported_content = self._export_to_txt(project_id, memory_content, stats, include_metadata)
+                    else:
+                        return self._error_response(-32603, f"Unsupported export format: {export_format}")
+                    
+                    # 如果指定了輸出路徑，寫入檔案
+                    if output_path:
+                        try:
+                            output_file = Path(output_path)
+                            output_file.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            if export_format == 'json':
+                                with open(output_file, 'w', encoding='utf-8') as f:
+                                    json.dump(exported_content, f, ensure_ascii=False, indent=2)
+                            else:
+                                with open(output_file, 'w', encoding='utf-8') as f:
+                                    f.write(exported_content)
+                            
+                            text = f"📤 **專案匯出完成 / Project Export Complete**\n\n"
+                            text += f"- 專案 / Project: **{project_id}**\n"
+                            text += f"- 格式 / Format: **{export_format.upper()}**\n"
+                            text += f"- 輸出檔案 / Output File: `{output_file}`\n"
+                            if stats['exists']:
+                                text += f"- 條目數量 / Entries: {stats['total_entries']}\n"
+                                text += f"- 總字數 / Words: {stats['total_words']}\n"
+                            text += f"\n✅ 檔案已成功儲存！"
+                            
+                        except Exception as e:
+                            return self._error_response(-32603, f"Failed to write export file: {str(e)}")
+                    else:
+                        # 直接返回內容
+                        if export_format == 'json':
+                            text = f"📤 **專案匯出 / Project Export** - {project_id} ({export_format.upper()})\n\n"
+                            text += f"```json\n{json.dumps(exported_content, ensure_ascii=False, indent=2)}\n```"
+                        else:
+                            text = f"📤 **專案匯出 / Project Export** - {project_id} ({export_format.upper()})\n\n"
+                            text += f"```{export_format}\n{exported_content}\n```"
+                    
+                    return self._success_response(text)
+                    
+                except Exception as e:
+                    logger.error(f"Export operation failed: {e}")
+                    return self._error_response(-32603, f"匯出過程中發生錯誤: {str(e)}")
+
             else:
                 return self._error_response(-32601, f"Unknown tool: {tool_name}")
 
@@ -2325,6 +2420,135 @@ No projects found. You can start creating your first memory!
                 'message': message
             }
         }
+
+    def _export_to_markdown(self, project_id: str, memory_content: str, stats: Dict, include_metadata: bool) -> str:
+        """匯出為 Markdown 格式"""
+        content = f"# {project_id}\n\n"
+        
+        if include_metadata and stats['exists']:
+            content += f"## 專案資訊 / Project Information\n\n"
+            content += f"- **專案名稱 / Project Name:** {project_id}\n"
+            content += f"- **條目數量 / Total Entries:** {stats['total_entries']}\n"
+            content += f"- **總字數 / Total Words:** {stats['total_words']}\n"
+            content += f"- **總字符數 / Total Characters:** {stats['total_characters']}\n"
+            if stats['categories']:
+                content += f"- **分類 / Categories:** {', '.join(stats['categories'])}\n"
+            if stats['latest_entry']:
+                content += f"- **最新條目 / Latest Entry:** {stats['latest_entry']}\n"
+            if stats['oldest_entry']:
+                content += f"- **最舊條目 / Oldest Entry:** {stats['oldest_entry']}\n"
+            content += f"- **匯出時間 / Export Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            content += "---\n\n"
+        
+        content += f"## 記憶內容 / Memory Content\n\n"
+        content += memory_content
+        
+        return content
+
+    def _export_to_json(self, project_id: str, memory_content: str, stats: Dict, include_metadata: bool) -> Dict:
+        """匯出為 JSON 格式"""
+        export_data = {
+            'project_id': project_id,
+            'content': memory_content,
+            'export_time': datetime.now().isoformat()
+        }
+        
+        if include_metadata and stats['exists']:
+            export_data['metadata'] = {
+                'total_entries': stats['total_entries'],
+                'total_words': stats['total_words'],
+                'total_characters': stats['total_characters'],
+                'categories': stats['categories'],
+                'latest_entry': stats['latest_entry'],
+                'oldest_entry': stats['oldest_entry']
+            }
+        
+        return export_data
+
+    def _export_to_csv(self, project_id: str, memory_content: str, stats: Dict, include_metadata: bool) -> str:
+        """匯出為 CSV 格式（簡化版本，主要用於條目列表）"""
+        import csv
+        from io import StringIO
+        
+        output = StringIO()
+        writer = csv.writer(output)
+        
+        # CSV 標題
+        if include_metadata:
+            writer.writerow(['Timestamp', 'Title', 'Category', 'Content'])
+        else:
+            writer.writerow(['Content'])
+        
+        # 嘗試解析記憶內容中的條目
+        lines = memory_content.split('\n')
+        current_entry = {'timestamp': '', 'title': '', 'category': '', 'content': ''}
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('**') and line.endswith('**'):
+                # 可能是時間戳記行
+                if current_entry['content']:
+                    # 寫入前一個條目
+                    if include_metadata:
+                        writer.writerow([current_entry['timestamp'], current_entry['title'], 
+                                       current_entry['category'], current_entry['content'].strip()])
+                    else:
+                        writer.writerow([current_entry['content'].strip()])
+                    current_entry = {'timestamp': '', 'title': '', 'category': '', 'content': ''}
+                
+                # 解析新條目的標題行
+                header = line[2:-2]  # 移除 **
+                if ' - ' in header:
+                    parts = header.split(' - ', 1)
+                    current_entry['timestamp'] = parts[0]
+                    title_and_category = parts[1]
+                    if ' #' in title_and_category:
+                        title_parts = title_and_category.split(' #')
+                        current_entry['title'] = title_parts[0]
+                        current_entry['category'] = title_parts[1] if len(title_parts) > 1 else ''
+                    else:
+                        current_entry['title'] = title_and_category
+                else:
+                    current_entry['timestamp'] = header
+            else:
+                if line:
+                    current_entry['content'] += line + '\n'
+        
+        # 寫入最後一個條目
+        if current_entry['content']:
+            if include_metadata:
+                writer.writerow([current_entry['timestamp'], current_entry['title'], 
+                               current_entry['category'], current_entry['content'].strip()])
+            else:
+                writer.writerow([current_entry['content'].strip()])
+        
+        return output.getvalue()
+
+    def _export_to_txt(self, project_id: str, memory_content: str, stats: Dict, include_metadata: bool) -> str:
+        """匯出為純文字格式"""
+        content = f"專案: {project_id}\n"
+        content += "=" * 50 + "\n\n"
+        
+        if include_metadata and stats['exists']:
+            content += f"專案資訊:\n"
+            content += f"- 條目數量: {stats['total_entries']}\n"
+            content += f"- 總字數: {stats['total_words']}\n"
+            content += f"- 總字符數: {stats['total_characters']}\n"
+            if stats['categories']:
+                content += f"- 分類: {', '.join(stats['categories'])}\n"
+            if stats['latest_entry']:
+                content += f"- 最新條目: {stats['latest_entry']}\n"
+            if stats['oldest_entry']:
+                content += f"- 最舊條目: {stats['oldest_entry']}\n"
+            content += f"- 匯出時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            content += "-" * 50 + "\n\n"
+        
+        content += "記憶內容:\n\n"
+        # 移除 Markdown 格式標記
+        clean_content = memory_content.replace('**', '').replace('*', '').replace('#', '')
+        content += clean_content
+        
+        return content
 
     async def run(self):
         """運行 MCP 伺服器"""
