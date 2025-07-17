@@ -1,8 +1,8 @@
 # 使用範例
 
-## 基本使用範例
+## 專案記憶使用範例
 
-### 1. 儲存記憶
+### 1. 儲存專案記憶
 ```
 請幫我儲存這次討論的重點：
 - 實作了 Python MCP 伺服器
@@ -13,7 +13,7 @@
 分類: development
 ```
 
-### 2. 搜尋記憶
+### 2. 搜尋專案記憶
 ```
 搜尋 "python-mcp-dev" 專案中關於 "MCP 伺服器" 的記錄
 ```
@@ -33,19 +33,103 @@
 顯示 "python-mcp-dev" 專案的記憶統計資訊
 ```
 
+## 全局記憶使用範例
+
+全局記憶用於儲存跨專案共享的知識，如開發規範、最佳實踐、常用模板等。
+
+### 1. 儲存全局記憶
+```
+請將這個 Git commit message 規範儲存到全局記憶：
+
+[TAG] module_name: 簡短描述變更內容 (≤ 50 字元)
+
+標籤說明：
+- [FIX] 修正錯誤
+- [ADD] 新增功能  
+- [IMP] 改進功能
+- [REF] 重構程式碼
+- [REM] 移除功能
+- [DOC] 文件更新
+- [TEST] 測試相關
+
+標題：Git Commit Message 規範
+分類：開發規範
+```
+
+### 2. 儲存程式碼模板到全局記憶
+```
+請將這個 Python 函數模板儲存到全局記憶：
+
+def function_name(param1: type, param2: type) -> return_type:
+    """
+    Brief description of the function.
+    
+    Args:
+        param1: Description of param1
+        param2: Description of param2
+        
+    Returns:
+        Description of return value
+        
+    Raises:
+        ExceptionType: Description of when this exception is raised
+    """
+    # Implementation here
+    pass
+
+標題：Python 函數文檔模板
+分類：程式碼模板
+```
+
+### 3. 查詢全局記憶
+```
+請查看全局記憶中的所有內容
+```
+
+### 4. 搜尋全局記憶
+```
+在全局記憶中搜尋關於 "Git" 的內容
+```
+
+### 5. 取得全局記憶統計
+```
+顯示全局記憶的統計資訊
+```
+
+### 6. 參考全局記憶進行工作
+```
+請參考全局記憶中的 Git commit 規範，幫我寫一個 commit message：
+- 修正了用戶登入驗證的問題
+- 影響的模組是 auth_service
+```
+
 ## 進階使用範例
 
-### 記憶分類
+### 專案記憶分類建議
 - `development` - 開發相關
 - `meeting` - 會議記錄
 - `ideas` - 想法和靈感
 - `bugs` - 錯誤和問題
 - `solutions` - 解決方案
 
+### 全局記憶分類建議
+- `開發規範` / `development-standards` - 程式碼規範、Git 規範等
+- `程式碼模板` / `code-templates` - 常用程式碼模板
+- `最佳實踐` / `best-practices` - 開發最佳實踐
+- `工具配置` / `tool-configs` - 開發工具配置
+- `參考資料` / `references` - 技術參考資料
+
 ### 搜尋技巧
 - 使用關鍵字搜尋內容
 - 搜尋結果按相關性排序
 - 支援部分匹配和模糊搜尋
+
+### 記憶管理最佳實踐
+- 🎯 **專案記憶**：儲存特定專案的討論、決策、進度
+- 🌐 **全局記憶**：儲存通用的規範、模板、最佳實踐
+- 📝 **明確分類**：使用有意義的分類標籤
+- 🔍 **定期整理**：定期檢視和更新記憶內容
+- 💡 **主動參考**：在需要時明確要求 AI 參考相關記憶
 
 ## 📤 匯出功能範例
 

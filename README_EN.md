@@ -17,6 +17,7 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
 - 🚀 **Auto project list display on startup** for enhanced user experience
 - 🎯 Perfect integration with Claude Desktop / Claude Code / Cursor / Rovo Dev
 - 🚀 Support for Rovo Dev's `acli` command management
+- 🌐 **Global Memory**: Cross-project knowledge base for storing universal standards and best practices
 - 🐍 Pure Python implementation with no additional dependencies
 
 ## 🛠️ Installation and Setup
@@ -157,6 +158,7 @@ Global configuration in `~/.cursor/mcp.json`:
 
 ## 🎯 Available Tools
 
+### Project Memory Tools
 | Tool | Description |
 |------|-------------|
 | `save_project_memory` | Save information to project memory |
@@ -171,6 +173,72 @@ Global configuration in `~/.cursor/mcp.json`:
 | `list_project_memory_entries` | List all entries with IDs |
 | `sync_markdown_to_sqlite` | Sync Markdown projects to SQLite |
 | `export_project_memory` | Export project memory to multiple formats |
+
+### Global Memory Tools
+| Tool | Description |
+|------|-------------|
+| `🌐 save_global_memory` | Save content to global memory |
+| `🌐 get_global_memory` | Get all global memory content |
+| `🌐 search_global_memory` | Search global memory content |
+| `🌐 get_global_memory_stats` | Get global memory statistics |
+
+## 📚 Usage Guide
+
+### Project Memory Operations
+
+Project memory is used for storing project-specific information, discussions, decisions, and progress.
+
+**Example: Save project memory**
+```
+Please save this discussion summary:
+- Implemented Python MCP server
+- Added SQLite and Markdown dual backend support
+- Integrated full-text search functionality
+
+Project: my-project
+Title: MCP Server Development Progress
+Category: development
+```
+
+**Example: Search project memory**
+```
+Search for "SQLite" in my-project
+```
+
+### Global Memory Operations
+
+Global memory is used for storing cross-project shared knowledge such as development standards, best practices, and common templates.
+
+**Example: Save global memory**
+```
+Please save this Git commit message standard to global memory:
+
+[TAG] module_name: Brief description of changes (≤ 50 chars)
+
+Tag descriptions:
+- [FIX] Bug fixes
+- [ADD] New features
+- [IMP] Improvements
+- [REF] Code refactoring
+
+Title: Git Commit Standards
+Category: development-standards
+```
+
+**Example: Query global memory**
+```
+Please check all content in global memory
+```
+
+**Example: Search global memory**
+```
+Search for "Git" in global memory
+```
+
+**Usage Recommendations**:
+- 🎯 **Project Memory**: Store project-specific discussions, decisions, progress
+- 🌐 **Global Memory**: Store universal standards, templates, best practices
+- 💡 **Active Reference**: Explicitly ask AI to reference relevant memory when needed
 
 ## 🔍 Troubleshooting
 

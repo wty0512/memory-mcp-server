@@ -2007,11 +2007,70 @@ class MCPServer:
                         },
                         'include_metadata': {
                             'type': 'boolean',
-                            'default': true,
+                            'default': True,
                             'description': 'Include metadata like timestamps and categories'
                         }
                     },
                     'required': ['project_id']
+                }
+            },
+            {
+                'name': 'save_global_memory',
+                'description': '儲存全局記憶 / Save global memory for cross-project knowledge',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'content': {
+                            'type': 'string',
+                            'description': 'Content to save to global memory'
+                        },
+                        'title': {
+                            'type': 'string',
+                            'description': 'Optional title for the global memory entry'
+                        },
+                        'category': {
+                            'type': 'string',
+                            'description': 'Optional category/tag for the global memory entry'
+                        }
+                    },
+                    'required': ['content']
+                }
+            },
+            {
+                'name': 'get_global_memory',
+                'description': '取得全局記憶 / Get all global memory content',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {},
+                    'required': []
+                }
+            },
+            {
+                'name': 'search_global_memory',
+                'description': '搜尋全局記憶 / Search global memory for specific content',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {
+                            'type': 'string',
+                            'description': 'Search query'
+                        },
+                        'limit': {
+                            'type': 'integer',
+                            'default': 10,
+                            'description': 'Maximum number of results to return'
+                        }
+                    },
+                    'required': ['query']
+                }
+            },
+            {
+                'name': 'get_global_memory_stats',
+                'description': '取得全局記憶統計 / Get global memory statistics',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {},
+                    'required': []
                 }
             }
         ]
@@ -2391,6 +2450,64 @@ No projects found. You can start creating your first memory!
                 except Exception as e:
                     logger.error(f"Export operation failed: {e}")
                     return self._error_response(-32603, f"匯出過程中發生錯誤: {str(e)}")
+
+            elif tool_name == 'save_global_memory':
+                success = self.memory_manager.save_memory(
+                    '__global__',
+                    arguments['content'],
+                    arguments.get('title', ''),
+                    arguments.get('category', '')
+                )
+                return self._success_response(
+                    f"Global memory {'saved' if success else 'failed to save'}: {arguments.get('title', 'Untitled')}"
+                )
+
+            elif tool_name == 'get_global_memory':
+                memory = self.memory_manager.get_memory('__global__')
+                return self._success_response(
+                    memory or "No global memory found. Use save_global_memory to start building your knowledge base."
+                )
+
+            elif tool_name == 'search_global_memory':
+                results = self.memory_manager.search_memory(
+                    '__global__',
+                    arguments['query'],
+                    arguments.get('limit', 10)
+                )
+                
+                if results:
+                    text = f"Found {len(results)} global memory matches for \"{arguments['query']}\":\n\n"
+                    for i, result in enumerate(results, 1):
+                        text += f"**{i}. {result['timestamp']}"
+                        if result['title']:
+                            text += f" - {result['title']}"
+                        if result['category']:
+                            text += f" #{result['category']}"
+                        text += f"**\n{result['content']}\n\n"
+                else:
+                    text = f"No global memory matches found for \"{arguments['query']}\""
+                
+                return self._success_response(text)
+
+            elif tool_name == 'get_global_memory_stats':
+                stats = self.memory_manager.get_memory_stats('__global__')
+                
+                if stats['exists']:
+                    text = f"📊 **Global Memory Statistics**:\n\n"
+                    text += f"- Total entries: {stats['total_entries']}\n"
+                    text += f"- Total words: {stats['total_words']}\n"
+                    text += f"- Total characters: {stats['total_characters']}\n"
+                    if stats['categories']:
+                        text += f"- Categories: {', '.join(stats['categories'])}\n"
+                    if stats['latest_entry']:
+                        text += f"- Latest entry: {stats['latest_entry']}\n"
+                    if stats['oldest_entry']:
+                        text += f"- Oldest entry: {stats['oldest_entry']}\n"
+                    text += f"\n💡 Global memory contains cross-project knowledge and standards."
+                else:
+                    text = f"📝 **Global Memory is Empty**\n\nStart building your global knowledge base with save_global_memory!"
+                
+                return self._success_response(text)
 
             else:
                 return self._error_response(-32601, f"Unknown tool: {tool_name}")

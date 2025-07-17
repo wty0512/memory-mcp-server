@@ -35,6 +35,8 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
   Perfect integration with Claude Desktop / Claude Code / Cursor / Rovo Dev
 - 🚀 支援 Rovo Dev 的 `acli` 命令管理  
   Support for Rovo Dev's `acli` command management
+- 🌐 **全局記憶**：跨專案共享的知識庫，儲存通用規範和最佳實踐  
+  **Global Memory**: Cross-project knowledge base for storing universal standards and best practices
 - 🐍 純 Python 實作，無額外依賴  
   Pure Python implementation with no additional dependencies
 
@@ -244,7 +246,9 @@ acli rovodev list-mcp
 
 ### 基本使用
 
-1. **儲存記憶**
+#### 專案記憶操作
+
+1. **儲存專案記憶**
 ```
 請幫我儲存這次討論的重點：
 - 實作了 Python MCP 伺服器
@@ -270,18 +274,61 @@ acli rovodev list-mcp
 顯示 "python-mcp-dev" 專案的記憶統計信息
 ```
 
+#### 全局記憶操作
+
+全局記憶用於儲存跨專案共享的知識，如開發規範、最佳實踐、常用模板等。
+
+1. **儲存全局記憶**
+```
+請將這個 Git commit message 規範儲存到全局記憶：
+
+[TAG] module_name: 簡短描述變更內容 (≤ 50 字元)
+
+標籤說明：
+- [FIX] 修正錯誤
+- [ADD] 新增功能  
+- [IMP] 改進功能
+- [REF] 重構程式碼
+
+標題：Git Commit 規範
+分類：開發規範
+```
+
+2. **查詢全局記憶**
+```
+請查看全局記憶中的所有內容
+```
+
+3. **搜尋全局記憶**
+```
+在全局記憶中搜尋關於 "Git" 的內容
+```
+
+**使用建議**：
+- 🎯 **專案記憶**：儲存特定專案的討論、決策、進度
+- 🌐 **全局記憶**：儲存通用的規範、模板、最佳實踐
+- 💡 **主動參考**：在需要時明確要求 AI 參考相關記憶
+
 ### 可用功能
-- `save_memory` - 保存記憶到指定專案
-- `get_memory` - 獲取專案的完整記憶
-- `search_memory` - 搜尋記憶內容
-- `list_projects` - 列出所有專案
-- `get_recent_memory` - 獲取最近的記憶條目
-- `get_memory_stats` - 獲取記憶統計信息
-- `delete_memory` - 刪除專案記憶（謹慎使用）
-- `🆕 list_memory_entries` - 列出專案中的所有記憶條目（帶ID編號）
-- `🆕 delete_memory_entry` - 刪除特定的記憶條目
-- `🆕 edit_memory_entry` - 編輯特定的記憶條目
+
+#### 專案記憶功能
+- `save_project_memory` - 保存記憶到指定專案
+- `get_project_memory` - 獲取專案的完整記憶
+- `search_project_memory` - 搜尋專案記憶內容
+- `list_memory_projects` - 列出所有專案
+- `get_recent_project_memory` - 獲取最近的記憶條目
+- `get_project_memory_stats` - 獲取記憶統計信息
+- `delete_project_memory` - 刪除專案記憶（謹慎使用）
+- `🆕 list_project_memory_entries` - 列出專案中的所有記憶條目（帶ID編號）
+- `🆕 delete_project_memory_entry` - 刪除特定的記憶條目
+- `🆕 edit_project_memory_entry` - 編輯特定的記憶條目
 - `📤 export_project_memory` - 匯出專案記憶為多種格式（Markdown、JSON、CSV、TXT）
+
+#### 全局記憶功能
+- `🌐 save_global_memory` - 儲存內容到全局記憶
+- `🌐 get_global_memory` - 獲取所有全局記憶內容
+- `🌐 search_global_memory` - 搜尋全局記憶內容
+- `🌐 get_global_memory_stats` - 獲取全局記憶統計信息
 
 ## 🆕 新功能使用指南
 
