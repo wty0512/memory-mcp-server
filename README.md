@@ -37,6 +37,8 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
   Support for Rovo Dev's `acli` command management
 - 🌐 **全局記憶**：跨專案共享的知識庫，儲存通用規範和最佳實踐  
   **Global Memory**: Cross-project knowledge base for storing universal standards and best practices
+- 🧠 **智能儲存**：AI 驅動的專案推薦，自動分析內容並建議最相關的專案  
+  **Intelligent Save**: AI-powered project recommendations, automatically analyze content and suggest most relevant projects
 - 🐍 純 Python 實作，無額外依賴  
   Pure Python implementation with no additional dependencies
 
@@ -313,6 +315,8 @@ acli rovodev list-mcp
 
 #### 專案記憶功能
 - `save_project_memory` - 保存記憶到指定專案
+- `🧠 start_intelligent_save` - 開始智能儲存流程，AI 推薦相關專案
+- `🧠 handle_save_choice` - 處理智能儲存中的用戶選擇
 - `get_project_memory` - 獲取專案的完整記憶
 - `search_project_memory` - 搜尋專案記憶內容
 - `list_memory_projects` - 列出所有專案
@@ -331,6 +335,52 @@ acli rovodev list-mcp
 - `🌐 get_global_memory_stats` - 獲取全局記憶統計信息
 
 ## 🆕 新功能使用指南
+
+### 🧠 智能儲存功能
+
+智能儲存功能使用 AI 分析您要儲存的內容，自動推薦最相關的現有專案，避免創建過多相似專案。
+
+#### 使用方式
+```
+直接使用 start_intelligent_save 工具開始智能儲存流程：
+
+參數：
+- content: 要儲存的內容（必需）
+- title: 可選標題
+- category: 可選分類
+
+系統會：
+1. 分析內容關鍵字和語義
+2. 計算與現有專案的相似度
+3. 推薦最相關的 2-3 個專案
+4. 提供互動式選擇介面
+```
+
+#### 互動流程
+```
+1. 系統推薦相關專案：
+   [1] 專案A (相似度: 85%)
+   [2] 專案B (相似度: 72%)
+   [3] 專案C (相似度: 68%)
+   [4] 查看所有專案
+   [5] 創建新專案
+
+2. 您可以選擇：
+   - 輸入數字選擇推薦專案
+   - 選擇查看所有專案列表
+   - 創建新專案並指定名稱
+   - 輸入 "cancel" 取消操作
+
+3. 確認後自動儲存到選定專案
+```
+
+#### 智能推薦算法
+- **關鍵字匹配**：分析內容中的重要詞彙
+- **語義相似度**：使用 TF-IDF 計算文本相似性
+- **專案活躍度**：優先推薦近期活躍的專案
+- **分類權重**：相同分類的專案獲得額外加分
+
+詳細使用範例請參閱：[智能儲存使用指南](intelligent_save_usage_example.md)
 
 ### 精確的記憶條目管理
 
