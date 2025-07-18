@@ -2813,6 +2813,15 @@ class MCPServer:
                 }
             },
             {
+                'name': 'get_backend_status',
+                'description': '快速查看當前後端狀態 / Quick check current backend status',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {},
+                    'required': []
+                }
+            },
+            {
                 'name': 'import_project_memory_universal',
                 'description': '通用匯入專案記憶 / Universal import project memory from various formats (auto-detect)',
                 'inputSchema': {
@@ -3390,6 +3399,55 @@ No projects found. You can start creating your first memory!
                 
                 return self._success_response(text)
 
+            elif tool_name == 'get_backend_status':
+                # 獲取當前後端類型
+                backend_type = type(self.memory_manager).__name__
+                backend_name = "SQLite" if "SQLite" in backend_type else "Markdown"
+                
+                # 獲取存儲路徑信息
+                if hasattr(self.memory_manager, 'db_path'):
+                    storage_path = str(self.memory_manager.db_path)
+                    storage_type = "Database file"
+                elif hasattr(self.memory_manager, 'memory_dir'):
+                    storage_path = str(self.memory_manager.memory_dir)
+                    storage_type = "Directory"
+                else:
+                    storage_path = "Unknown"
+                    storage_type = "Unknown"
+                
+                # 獲取項目統計
+                projects = self.memory_manager.list_projects()
+                total_projects = len(projects)
+                total_entries = sum(p['entries_count'] for p in projects)
+                
+                # 構建狀態信息
+                text = f"🔧 **Backend Status / 後端狀態**\n\n"
+                text += f"**Current Backend / 當前後端**: {backend_name}\n"
+                text += f"**Backend Class / 後端類別**: `{backend_type}`\n"
+                text += f"**Storage Type / 存儲類型**: {storage_type}\n"
+                text += f"**Storage Path / 存儲路徑**: `{storage_path}`\n\n"
+                text += f"📊 **Quick Stats / 快速統計**:\n"
+                text += f"- Projects / 專案數: **{total_projects}**\n"
+                text += f"- Total Entries / 總條目數: **{total_entries}**\n\n"
+                
+                # 添加後端特性說明
+                if backend_name == "SQLite":
+                    text += f"✅ **SQLite Features / SQLite 特性**:\n"
+                    text += f"- 🔍 Full-text search / 全文搜尋\n"
+                    text += f"- 🚀 High performance / 高效能\n"
+                    text += f"- 🔒 ACID transactions / ACID 事務\n"
+                    text += f"- 📊 Complex queries / 複雜查詢\n"
+                else:
+                    text += f"✅ **Markdown Features / Markdown 特性**:\n"
+                    text += f"- 📝 Human-readable / 人類可讀\n"
+                    text += f"- 🔄 Version control friendly / 版本控制友好\n"
+                    text += f"- 📁 File-based storage / 檔案式存儲\n"
+                    text += f"- 🔄 Easy backup / 容易備份\n"
+                
+                text += f"\n💡 Use `list_memory_projects` to see all projects"
+                
+                return self._success_response(text)
+
             elif tool_name == 'import_project_memory_universal':
                 result = self.importer.import_universal(
                     arguments['file_path'],
@@ -3715,12 +3773,17 @@ No projects found. You can start creating your first memory!
         finally:
             logger.info("Server shutdown complete")
 
-def create_backend(backend_type: str) -> MemoryBackend:
+def create_backend(backend_type: str, db_path: str = None) -> MemoryBackend:
     """根據類型創建記憶後端"""
     if backend_type == "markdown":
         return MarkdownMemoryManager()
     elif backend_type == "sqlite":
-        return SQLiteBackend()
+        if db_path:
+            # 展開 ~ 家目錄符號
+            expanded_path = os.path.expanduser(db_path)
+            return SQLiteBackend(expanded_path)
+        else:
+            return SQLiteBackend()
     else:
         raise ValueError(f"Unknown backend type: {backend_type}")
 
@@ -3757,6 +3820,11 @@ def main():
         default=0.8,
         help="相似度閾值 (0.0-1.0)，用於決定是否自動合併"
     )
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        help="SQLite 資料庫路徑 (預設: ai-memory/memory.db)，支援 ~ 家目錄符號"
+    )
     
     args = parser.parse_args()
     
@@ -3769,8 +3837,12 @@ def main():
         
         # 顯示後端特定資訊（不初始化）
         if args.backend == "sqlite":
-            db_path = Path("ai-memory/memory.db")
-            print(f"SQLite database: {db_path}")
+            if args.db_path:
+                db_path = Path(os.path.expanduser(args.db_path))
+                print(f"SQLite database (custom): {db_path}")
+            else:
+                db_path = Path("ai-memory/memory.db")
+                print(f"SQLite database (default): {db_path}")
             print(f"Database exists: {db_path.exists()}")
         elif args.backend == "markdown":
             memory_dir = Path(__file__).parent.resolve() / "ai-memory"
@@ -3835,8 +3907,11 @@ def main():
     
     # 創建後端（只有實際運行時才初始化）
     try:
-        backend = create_backend(args.backend)
-        logger.info(f"Using {args.backend} backend")
+        backend = create_backend(args.backend, args.db_path)
+        if args.backend == "sqlite" and args.db_path:
+            logger.info(f"Using {args.backend} backend with custom path: {args.db_path}")
+        else:
+            logger.info(f"Using {args.backend} backend")
     except Exception as e:
         logger.error(f"Failed to create backend: {e}")
         sys.exit(1)
