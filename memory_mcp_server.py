@@ -189,6 +189,7 @@ class AtomicFileWriter:
             except FileNotFoundError:
                 pass
 
+
 class MemoryBackend(ABC):
     """
     記憶後端抽象基類
@@ -380,16 +381,17 @@ class InteractiveMemorySaver:
         # 生成唯一的會話 ID
         session_id = f"save_{int(time.time())}"
         
-        # 儲存待處理的請求
+        # 獲取推薦專案
+        recommendations = self.recommender.recommend_projects(content)
+        
+        # 儲存待處理的請求（包含推薦結果）
         self.pending_saves[session_id] = {
             'content': content,
             'title': title,
             'category': category,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'recommendations': recommendations  # 儲存推薦結果
         }
-        
-        # 獲取推薦專案
-        recommendations = self.recommender.recommend_projects(content)
         
         if recommendations:
             # 有推薦專案
@@ -426,29 +428,72 @@ class InteractiveMemorySaver:
         content = save_data['content']
         title = save_data['title']
         category = save_data['category']
+        recommendations = save_data.get('recommendations', [])  # 使用儲存的推薦結果
         
-        user_input = user_input.strip().lower()
+        original_input = user_input.strip()
+        user_input_lower = user_input.strip().lower()
         
-        # 處理數字選擇
-        if user_input.isdigit():
-            choice_num = int(user_input)
-            recommendations = self.recommender.recommend_projects(content)
-            
-            if 1 <= choice_num <= len(recommendations):
-                # 選擇推薦的專案
-                selected_project = recommendations[choice_num - 1]
-                project_id = selected_project['id']
+        # 處理數字選擇（包括負數檢查）
+        if original_input.lstrip('-').isdigit():  # 檢查是否為數字（包括負數）
+            try:
+                choice_num = int(original_input)
                 
-                # 執行儲存
-                success = self.backend.save_memory(project_id, content, title, category)
+                if choice_num <= 0:
+                    # 負數或零都是無效選擇
+                    if recommendations:
+                        return f"❌ 請選擇 1-{len(recommendations)} 之間的數字，或輸入其他指令。"
+                    else:
+                        return f"❌ 請選擇有效的選項編號，或輸入專案名稱。"
                 
-                # 清理會話
-                del self.pending_saves[session_id]
-                
-                if success:
-                    return f"✅ 已儲存到專案 '{project_id}'。"
+                if recommendations and 1 <= choice_num <= len(recommendations):
+                    # 選擇推薦的專案
+                    selected_project = recommendations[choice_num - 1]
+                    project_id = selected_project['id']
+                    
+                    # 執行儲存
+                    success = self.backend.save_memory(project_id, content, title, category)
+                    
+                    # 清理會話
+                    del self.pending_saves[session_id]
+                    
+                    if success:
+                        return f"✅ 已儲存到專案 '{project_id}'。"
+                    else:
+                        return f"❌ 儲存到專案 '{project_id}' 失敗。"
+                elif recommendations:
+                    # 有推薦專案但數字超出範圍
+                    return f"❌ 請選擇 1-{len(recommendations)} 之間的數字，或輸入其他指令。"
                 else:
-                    return f"❌ 儲存到專案 '{project_id}' 失敗。"
+                    # 沒有推薦專案時的數字選擇處理
+                    suggested_name = self.recommender.suggest_project_name(content)
+                    if choice_num == 1:
+                        # 使用建議名稱
+                        success = self.backend.save_memory(suggested_name, content, title, category)
+                        del self.pending_saves[session_id]
+                        if success:
+                            return f"✅ 已儲存到新專案 '{suggested_name}'。"
+                        else:
+                            return f"❌ 儲存到新專案 '{suggested_name}' 失敗。"
+                    elif choice_num == 2:
+                        # 列出所有專案
+                        projects = self.backend.list_projects()
+                        response = f"所有現有專案：\n"
+                        for i, project in enumerate(projects, 1):
+                            response += f"{i}. {project['name']}\n"
+                        response += f"\n請告訴我要儲存到哪個專案，或輸入新專案名稱。\n"
+                        response += f"會話 ID: {session_id}"
+                        return response
+                    elif choice_num == 3:
+                        # 指定其他專案名稱
+                        response = f"請輸入新的專案名稱：\n"
+                        response += f"會話 ID: {session_id}"
+                        return response
+                    else:
+                        return f"❌ 請選擇 1-3 之間的數字，或輸入其他指令。"
+                            
+            except ValueError:
+                # 理論上不會到這裡，但以防萬一
+                pass
         
         # 處理文字指令
         if '列出' in user_input or 'list' in user_input or '所有專案' in user_input:
@@ -461,7 +506,7 @@ class InteractiveMemorySaver:
             response += f"會話 ID: {session_id}"
             return response
         
-        elif '新建' in user_input or 'new' in user_input or '創建' in user_input:
+        elif '新建' in user_input_lower or 'new' in user_input_lower or '創建' in user_input_lower:
             # 創建新專案
             suggested_name = self.recommender.suggest_project_name(content)
             response = f"創建新專案。建議名稱：{suggested_name}\n\n"
@@ -485,13 +530,11 @@ class InteractiveMemorySaver:
                 return f"❌ 儲存到新專案 '{suggested_name}' 失敗。"
         
         else:
-            # 假設用戶輸入的是專案名稱
-            project_id = user_input.strip()
-            
+            # 將用戶輸入當作專案名稱（但排除純數字的情況，因為純數字應該是選擇編號）
             # 清理專案名稱
-            project_id = re.sub(r'[^\w\-\u4e00-\u9fff]', '-', project_id)
+            project_id = re.sub(r'[^\w\-\u4e00-\u9fff]', '-', original_input)
             
-            if project_id:
+            if project_id and project_id != '-':
                 # 執行儲存
                 success = self.backend.save_memory(project_id, content, title, category)
                 
@@ -503,7 +546,7 @@ class InteractiveMemorySaver:
                 else:
                     return f"❌ 儲存到專案 '{project_id}' 失敗。"
             else:
-                return "錯誤：專案名稱無效。請重新輸入專案名稱。"
+                return "❌ 專案名稱不能為空或只包含特殊字符。請重新輸入有效的專案名稱。"
     
     def cleanup_old_sessions(self, max_age_seconds: int = 3600):
         """清理過期的會話"""
@@ -722,9 +765,13 @@ class MarkdownMemoryManager(MemoryBackend):
         return timestamp, title, category
 
     def list_projects(self) -> List[Dict[str, Any]]:
-        """列出所有專案及其統計資訊"""
+        """列出所有專案及其統計資訊（排除全局記憶）"""
         projects = []
         for file in self.memory_dir.glob("*.md"):
+            # 過濾掉全局記憶檔案
+            if file.stem == "__global__":
+                continue
+                
             try:
                 content = file.read_text(encoding='utf-8')
                 sections = self._parse_memory_sections(content)
@@ -1302,7 +1349,7 @@ class SQLiteBackend(MemoryBackend):
         }
     
     def list_projects(self) -> List[Dict[str, Any]]:
-        """列出所有專案及其統計資訊"""
+        """列出所有專案及其統計資訊（排除全局記憶）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.execute("""
@@ -1311,6 +1358,7 @@ class SQLiteBackend(MemoryBackend):
                            GROUP_CONCAT(DISTINCT me.category) as categories
                     FROM projects p
                     LEFT JOIN memory_entries me ON p.id = me.project_id
+                    WHERE p.id != '__global__'
                     GROUP BY p.id, p.name, p.created_at, p.updated_at
                     ORDER BY p.updated_at DESC
                 """)
