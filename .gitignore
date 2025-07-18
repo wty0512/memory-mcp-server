@@ -43,3 +43,6 @@ tmp_*
 
 # Personal memory data (should not be committed)
 ai-memory/
+
+# Agent configuration files
+.agent.md
