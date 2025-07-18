@@ -33,8 +33,8 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
 
 ```bash
 # Clone the project
-git clone https://github.com/wty0512/markdown-memory-mcp-server.git
-cd markdown-memory-mcp-server
+git clone https://github.com/wty0512/memory-mcp-server.git
+cd memory-mcp-server
 
 # Create virtual environment (optional but recommended)
 python3 -m venv venv
@@ -322,8 +322,8 @@ We welcome contributions! Please feel free to submit issues and pull requests.
 
 ```bash
 # Clone for development
-git clone https://github.com/wty0512/markdown-memory-mcp-server.git
-cd markdown-memory-mcp-server
+git clone https://github.com/wty0512/memory-mcp-server.git
+cd memory-mcp-server
 
 # Create development environment
 python3 -m venv venv

@@ -54,8 +54,8 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
 
 ```bash
 # 克隆專案 / Clone the project
-git clone https://github.com/wty0512/markdown-memory-mcp-server.git
-cd markdown-memory-mcp-server
+git clone https://github.com/wty0512/memory-mcp-server.git
+cd memory-mcp-server
 
 # 創建虛擬環境（可選但推薦）/ Create virtual environment (optional but recommended)
 python3 -m venv venv
