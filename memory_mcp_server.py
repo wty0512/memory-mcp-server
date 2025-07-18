@@ -24,6 +24,7 @@ import os
 import sys
 import sqlite3
 import time
+import csv
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1958,6 +1959,379 @@ class DataSyncManager:
         """獲取同步報告"""
         return self.sync_log
 
+class ProjectMemoryImporter:
+    """專案記憶匯入器 / Project Memory Importer
+    
+    支援從多種格式匯入專案記憶資料
+    Supports importing project memory data from multiple formats
+    """
+    
+    def __init__(self, memory_manager: MemoryBackend):
+        self.memory_manager = memory_manager
+        self.logger = logging.getLogger(__name__)
+    
+    def import_from_markdown(self, file_path: str, project_id: str = None, 
+                           merge_strategy: str = "append") -> Dict[str, Any]:
+        """從 Markdown 檔案匯入記憶資料
+        
+        Args:
+            file_path: Markdown 檔案路徑
+            project_id: 目標專案 ID，如果為 None 則從檔案名推斷
+            merge_strategy: 合併策略 ("append", "replace", "skip_duplicates")
+        """
+        try:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+            
+            # 推斷專案 ID
+            if not project_id:
+                project_id = file_path.stem.replace('-', '_').replace(' ', '_')
+            
+            # 讀取 Markdown 內容
+            content = file_path.read_text(encoding='utf-8')
+            
+            # 解析 Markdown 格式的記憶條目
+            entries = self._parse_markdown_entries(content)
+            
+            # 匯入條目
+            imported_count = 0
+            skipped_count = 0
+            
+            for entry in entries:
+                try:
+                    if merge_strategy == "replace":
+                        # 替換模式：先清空專案
+                        if imported_count == 0:
+                            self.memory_manager.delete_memory(project_id)
+                    
+                    elif merge_strategy == "skip_duplicates":
+                        # 檢查重複
+                        if self._is_duplicate_entry(project_id, entry):
+                            skipped_count += 1
+                            continue
+                    
+                    # 儲存條目
+                    self.memory_manager.save_memory(
+                        project_id,
+                        entry['content'],
+                        entry.get('title', ''),
+                        entry.get('category', '')
+                    )
+                    imported_count += 1
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to import entry: {e}")
+                    continue
+            
+            return {
+                "success": True,
+                "project_id": project_id,
+                "imported_count": imported_count,
+                "skipped_count": skipped_count,
+                "total_entries": len(entries),
+                "message": f"Successfully imported {imported_count} entries to project '{project_id}'"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error importing from Markdown: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to import from {file_path}"
+            }
+    
+    def import_from_json(self, file_path: str, project_id: str = None,
+                        merge_strategy: str = "append") -> Dict[str, Any]:
+        """從 JSON 檔案匯入記憶資料"""
+        try:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+            
+            # 推斷專案 ID
+            if not project_id:
+                project_id = file_path.stem.replace('-', '_').replace(' ', '_')
+            
+            # 讀取 JSON 內容
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 解析 JSON 格式
+            entries = self._parse_json_entries(data)
+            
+            # 匯入條目
+            imported_count = 0
+            skipped_count = 0
+            
+            for entry in entries:
+                try:
+                    if merge_strategy == "replace":
+                        if imported_count == 0:
+                            self.memory_manager.delete_memory(project_id)
+                    
+                    elif merge_strategy == "skip_duplicates":
+                        if self._is_duplicate_entry(project_id, entry):
+                            skipped_count += 1
+                            continue
+                    
+                    self.memory_manager.save_memory(
+                        project_id,
+                        entry['content'],
+                        entry.get('title', ''),
+                        entry.get('category', '')
+                    )
+                    imported_count += 1
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to import entry: {e}")
+                    continue
+            
+            return {
+                "success": True,
+                "project_id": project_id,
+                "imported_count": imported_count,
+                "skipped_count": skipped_count,
+                "total_entries": len(entries),
+                "message": f"Successfully imported {imported_count} entries to project '{project_id}'"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error importing from JSON: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to import from {file_path}"
+            }
+    
+    def import_from_csv(self, file_path: str, project_id: str = None,
+                       merge_strategy: str = "append") -> Dict[str, Any]:
+        """從 CSV 檔案匯入記憶資料"""
+        try:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+            
+            # 推斷專案 ID
+            if not project_id:
+                project_id = file_path.stem.replace('-', '_').replace(' ', '_')
+            
+            # 讀取 CSV 內容
+            entries = []
+            with open(file_path, 'r', encoding='utf-8', newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    entries.append({
+                        'timestamp': row.get('timestamp', ''),
+                        'title': row.get('title', ''),
+                        'category': row.get('category', ''),
+                        'content': row.get('content', '')
+                    })
+            
+            # 匯入條目
+            imported_count = 0
+            skipped_count = 0
+            
+            for entry in entries:
+                try:
+                    if not entry['content'].strip():
+                        continue
+                    
+                    if merge_strategy == "replace":
+                        if imported_count == 0:
+                            self.memory_manager.delete_memory(project_id)
+                    
+                    elif merge_strategy == "skip_duplicates":
+                        if self._is_duplicate_entry(project_id, entry):
+                            skipped_count += 1
+                            continue
+                    
+                    self.memory_manager.save_memory(
+                        project_id,
+                        entry['content'],
+                        entry.get('title', ''),
+                        entry.get('category', '')
+                    )
+                    imported_count += 1
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to import entry: {e}")
+                    continue
+            
+            return {
+                "success": True,
+                "project_id": project_id,
+                "imported_count": imported_count,
+                "skipped_count": skipped_count,
+                "total_entries": len(entries),
+                "message": f"Successfully imported {imported_count} entries to project '{project_id}'"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error importing from CSV: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to import from {file_path}"
+            }
+    
+    def import_universal(self, file_path: str, project_id: str = None,
+                        merge_strategy: str = "append") -> Dict[str, Any]:
+        """通用匯入功能，自動檢測檔案格式"""
+        try:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+            
+            # 根據副檔名檢測格式
+            suffix = file_path.suffix.lower()
+            
+            if suffix == '.md':
+                return self.import_from_markdown(str(file_path), project_id, merge_strategy)
+            elif suffix == '.json':
+                return self.import_from_json(str(file_path), project_id, merge_strategy)
+            elif suffix == '.csv':
+                return self.import_from_csv(str(file_path), project_id, merge_strategy)
+            elif suffix == '.txt':
+                # TXT 檔案當作簡單的 Markdown 處理
+                return self.import_from_markdown(str(file_path), project_id, merge_strategy)
+            else:
+                raise ValueError(f"Unsupported file format: {suffix}")
+                
+        except Exception as e:
+            self.logger.error(f"Error in universal import: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to import from {file_path}"
+            }
+    
+    def _parse_markdown_entries(self, content: str) -> List[Dict[str, Any]]:
+        """解析 Markdown 格式的記憶條目"""
+        entries = []
+        
+        # 分割條目（使用 ## 或 --- 作為分隔符）
+        sections = re.split(r'\n(?:## |\-\-\-\n)', content)
+        
+        for section in sections:
+            if not section.strip():
+                continue
+            
+            entry = {}
+            lines = section.strip().split('\n')
+            
+            # 解析第一行（可能包含時間戳和標題）
+            first_line = lines[0] if lines else ""
+            
+            # 嘗試解析時間戳
+            timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})', first_line)
+            if timestamp_match:
+                entry['timestamp'] = timestamp_match.group(1)
+                # 移除時間戳後的部分作為標題
+                title = re.sub(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}', '', first_line).strip()
+                if title.startswith('- '):
+                    title = title[2:]
+                entry['title'] = title
+            else:
+                entry['title'] = first_line
+            
+            # 解析分類（尋找 #category 格式）
+            category_match = re.search(r'#(\w+)', first_line)
+            if category_match:
+                entry['category'] = category_match.group(1)
+                # 從標題中移除分類標籤
+                entry['title'] = re.sub(r'\s*#\w+\s*', '', entry['title']).strip()
+            
+            # 內容是剩餘的行
+            if len(lines) > 1:
+                entry['content'] = '\n'.join(lines[1:]).strip()
+            else:
+                entry['content'] = entry.get('title', '')
+            
+            if entry['content']:
+                entries.append(entry)
+        
+        return entries
+    
+    def _parse_json_entries(self, data: Any) -> List[Dict[str, Any]]:
+        """解析 JSON 格式的記憶條目"""
+        entries = []
+        
+        if isinstance(data, list):
+            # 陣列格式
+            for item in data:
+                if isinstance(item, dict):
+                    entries.append(self._normalize_entry(item))
+                elif isinstance(item, str):
+                    entries.append({'content': item})
+        
+        elif isinstance(data, dict):
+            # 物件格式
+            if 'entries' in data:
+                # 有 entries 欄位
+                for item in data['entries']:
+                    entries.append(self._normalize_entry(item))
+            else:
+                # 單一條目
+                entries.append(self._normalize_entry(data))
+        
+        return entries
+    
+    def _normalize_entry(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """標準化條目格式"""
+        normalized = {}
+        
+        # 內容欄位的可能名稱
+        content_fields = ['content', 'text', 'body', 'message', 'description']
+        for field in content_fields:
+            if field in entry and entry[field]:
+                normalized['content'] = str(entry[field])
+                break
+        
+        # 標題欄位
+        title_fields = ['title', 'name', 'subject', 'heading']
+        for field in title_fields:
+            if field in entry and entry[field]:
+                normalized['title'] = str(entry[field])
+                break
+        
+        # 分類欄位
+        category_fields = ['category', 'tag', 'type', 'label']
+        for field in category_fields:
+            if field in entry and entry[field]:
+                normalized['category'] = str(entry[field])
+                break
+        
+        # 時間戳欄位
+        timestamp_fields = ['timestamp', 'created_at', 'date', 'time']
+        for field in timestamp_fields:
+            if field in entry and entry[field]:
+                normalized['timestamp'] = str(entry[field])
+                break
+        
+        return normalized
+    
+    def _is_duplicate_entry(self, project_id: str, entry: Dict[str, Any]) -> bool:
+        """檢查是否為重複條目"""
+        try:
+            # 搜尋相似內容
+            search_results = self.memory_manager.search_memory(
+                project_id, entry['content'][:100], limit=5
+            )
+            
+            # 簡單的重複檢測：內容前100字符相同
+            entry_preview = entry['content'][:100].strip().lower()
+            for result in search_results:
+                if result['content'][:100].strip().lower() == entry_preview:
+                    return True
+            
+            return False
+            
+        except Exception:
+            # 如果檢測失敗，假設不重複
+            return False
+
+
 class MCPServer:
     """
     Model Context Protocol 伺服器
@@ -1980,6 +2354,9 @@ class MCPServer:
         # 初始化智能儲存組件
         self.recommender = ProjectRecommender(self.memory_manager)
         self.interactive_saver = InteractiveMemorySaver(self.memory_manager, self.recommender)
+        
+        # 初始化匯入器
+        self.importer = ProjectMemoryImporter(self.memory_manager)
 
     async def handle_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """處理 MCP 訊息"""
@@ -2385,6 +2762,126 @@ class MCPServer:
                     'type': 'object',
                     'properties': {},
                     'required': []
+                }
+            },
+            {
+                'name': 'import_project_memory_universal',
+                'description': '通用匯入專案記憶 / Universal import project memory from various formats (auto-detect)',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'file_path': {
+                            'type': 'string',
+                            'description': 'Path to the file to import (supports .md, .json, .csv, .txt)'
+                        },
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Target project ID (optional, will be inferred from filename if not provided)'
+                        },
+                        'merge_strategy': {
+                            'type': 'string',
+                            'enum': ['append', 'replace', 'skip_duplicates'],
+                            'default': 'append',
+                            'description': 'How to handle existing data: append (add to existing), replace (clear first), skip_duplicates (avoid duplicates)'
+                        }
+                    },
+                    'required': ['file_path']
+                }
+            },
+            {
+                'name': 'import_project_memory_from_markdown',
+                'description': '從 Markdown 檔案匯入專案記憶 / Import project memory from Markdown file',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'file_path': {
+                            'type': 'string',
+                            'description': 'Path to the Markdown file to import'
+                        },
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Target project ID (optional, will be inferred from filename if not provided)'
+                        },
+                        'merge_strategy': {
+                            'type': 'string',
+                            'enum': ['append', 'replace', 'skip_duplicates'],
+                            'default': 'append',
+                            'description': 'How to handle existing data'
+                        }
+                    },
+                    'required': ['file_path']
+                }
+            },
+            {
+                'name': 'import_project_memory_from_json',
+                'description': '從 JSON 檔案匯入專案記憶 / Import project memory from JSON file',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'file_path': {
+                            'type': 'string',
+                            'description': 'Path to the JSON file to import'
+                        },
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Target project ID (optional, will be inferred from filename if not provided)'
+                        },
+                        'merge_strategy': {
+                            'type': 'string',
+                            'enum': ['append', 'replace', 'skip_duplicates'],
+                            'default': 'append',
+                            'description': 'How to handle existing data'
+                        }
+                    },
+                    'required': ['file_path']
+                }
+            },
+            {
+                'name': 'import_project_memory_from_csv',
+                'description': '從 CSV 檔案匯入專案記憶 / Import project memory from CSV file',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'file_path': {
+                            'type': 'string',
+                            'description': 'Path to the CSV file to import (expects columns: timestamp, title, category, content)'
+                        },
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Target project ID (optional, will be inferred from filename if not provided)'
+                        },
+                        'merge_strategy': {
+                            'type': 'string',
+                            'enum': ['append', 'replace', 'skip_duplicates'],
+                            'default': 'append',
+                            'description': 'How to handle existing data'
+                        }
+                    },
+                    'required': ['file_path']
+                }
+            },
+            {
+                'name': 'import_project_memory_from_txt',
+                'description': '從 TXT 檔案匯入專案記憶 / Import project memory from TXT file',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'file_path': {
+                            'type': 'string',
+                            'description': 'Path to the TXT file to import (treated as simple markdown)'
+                        },
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Target project ID (optional, will be inferred from filename if not provided)'
+                        },
+                        'merge_strategy': {
+                            'type': 'string',
+                            'enum': ['append', 'replace', 'skip_duplicates'],
+                            'default': 'append',
+                            'description': 'How to handle existing data'
+                        }
+                    },
+                    'required': ['file_path']
                 }
             }
         ]
@@ -2842,6 +3339,131 @@ No projects found. You can start creating your first memory!
                     text += f"\n💡 Global memory contains cross-project knowledge and standards."
                 else:
                     text = f"📝 **Global Memory is Empty**\n\nStart building your global knowledge base with save_global_memory!"
+                
+                return self._success_response(text)
+
+            elif tool_name == 'import_project_memory_universal':
+                result = self.importer.import_universal(
+                    arguments['file_path'],
+                    arguments.get('project_id'),
+                    arguments.get('merge_strategy', 'append')
+                )
+                
+                if result['success']:
+                    text = f"📥 **通用匯入成功 / Universal Import Successful**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 目標專案 / Target Project: **{result['project_id']}**\n"
+                    text += f"- 匯入策略 / Merge Strategy: {arguments.get('merge_strategy', 'append')}\n"
+                    text += f"- 成功匯入 / Imported: **{result['imported_count']}** 條目\n"
+                    if result['skipped_count'] > 0:
+                        text += f"- 跳過重複 / Skipped: **{result['skipped_count']}** 條目\n"
+                    text += f"- 總條目數 / Total Entries: {result['total_entries']}\n\n"
+                    text += f"✅ {result['message']}"
+                else:
+                    text = f"❌ **匯入失敗 / Import Failed**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 錯誤訊息 / Error: {result.get('error', 'Unknown error')}\n\n"
+                    text += result.get('message', 'Import operation failed')
+                
+                return self._success_response(text)
+
+            elif tool_name == 'import_project_memory_from_markdown':
+                result = self.importer.import_from_markdown(
+                    arguments['file_path'],
+                    arguments.get('project_id'),
+                    arguments.get('merge_strategy', 'append')
+                )
+                
+                if result['success']:
+                    text = f"📥 **Markdown 匯入成功 / Markdown Import Successful**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 目標專案 / Target Project: **{result['project_id']}**\n"
+                    text += f"- 匯入策略 / Merge Strategy: {arguments.get('merge_strategy', 'append')}\n"
+                    text += f"- 成功匯入 / Imported: **{result['imported_count']}** 條目\n"
+                    if result['skipped_count'] > 0:
+                        text += f"- 跳過重複 / Skipped: **{result['skipped_count']}** 條目\n"
+                    text += f"- 總條目數 / Total Entries: {result['total_entries']}\n\n"
+                    text += f"✅ {result['message']}"
+                else:
+                    text = f"❌ **Markdown 匯入失敗 / Markdown Import Failed**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 錯誤訊息 / Error: {result.get('error', 'Unknown error')}\n\n"
+                    text += result.get('message', 'Import operation failed')
+                
+                return self._success_response(text)
+
+            elif tool_name == 'import_project_memory_from_json':
+                result = self.importer.import_from_json(
+                    arguments['file_path'],
+                    arguments.get('project_id'),
+                    arguments.get('merge_strategy', 'append')
+                )
+                
+                if result['success']:
+                    text = f"📥 **JSON 匯入成功 / JSON Import Successful**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 目標專案 / Target Project: **{result['project_id']}**\n"
+                    text += f"- 匯入策略 / Merge Strategy: {arguments.get('merge_strategy', 'append')}\n"
+                    text += f"- 成功匯入 / Imported: **{result['imported_count']}** 條目\n"
+                    if result['skipped_count'] > 0:
+                        text += f"- 跳過重複 / Skipped: **{result['skipped_count']}** 條目\n"
+                    text += f"- 總條目數 / Total Entries: {result['total_entries']}\n\n"
+                    text += f"✅ {result['message']}"
+                else:
+                    text = f"❌ **JSON 匯入失敗 / JSON Import Failed**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 錯誤訊息 / Error: {result.get('error', 'Unknown error')}\n\n"
+                    text += result.get('message', 'Import operation failed')
+                
+                return self._success_response(text)
+
+            elif tool_name == 'import_project_memory_from_csv':
+                result = self.importer.import_from_csv(
+                    arguments['file_path'],
+                    arguments.get('project_id'),
+                    arguments.get('merge_strategy', 'append')
+                )
+                
+                if result['success']:
+                    text = f"📥 **CSV 匯入成功 / CSV Import Successful**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 目標專案 / Target Project: **{result['project_id']}**\n"
+                    text += f"- 匯入策略 / Merge Strategy: {arguments.get('merge_strategy', 'append')}\n"
+                    text += f"- 成功匯入 / Imported: **{result['imported_count']}** 條目\n"
+                    if result['skipped_count'] > 0:
+                        text += f"- 跳過重複 / Skipped: **{result['skipped_count']}** 條目\n"
+                    text += f"- 總條目數 / Total Entries: {result['total_entries']}\n\n"
+                    text += f"✅ {result['message']}"
+                else:
+                    text = f"❌ **CSV 匯入失敗 / CSV Import Failed**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 錯誤訊息 / Error: {result.get('error', 'Unknown error')}\n\n"
+                    text += result.get('message', 'Import operation failed')
+                
+                return self._success_response(text)
+
+            elif tool_name == 'import_project_memory_from_txt':
+                result = self.importer.import_from_markdown(  # TXT 當作 Markdown 處理
+                    arguments['file_path'],
+                    arguments.get('project_id'),
+                    arguments.get('merge_strategy', 'append')
+                )
+                
+                if result['success']:
+                    text = f"📥 **TXT 匯入成功 / TXT Import Successful**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 目標專案 / Target Project: **{result['project_id']}**\n"
+                    text += f"- 匯入策略 / Merge Strategy: {arguments.get('merge_strategy', 'append')}\n"
+                    text += f"- 成功匯入 / Imported: **{result['imported_count']}** 條目\n"
+                    if result['skipped_count'] > 0:
+                        text += f"- 跳過重複 / Skipped: **{result['skipped_count']}** 條目\n"
+                    text += f"- 總條目數 / Total Entries: {result['total_entries']}\n\n"
+                    text += f"✅ {result['message']}"
+                else:
+                    text = f"❌ **TXT 匯入失敗 / TXT Import Failed**\n\n"
+                    text += f"- 檔案路徑 / File Path: `{arguments['file_path']}`\n"
+                    text += f"- 錯誤訊息 / Error: {result.get('error', 'Unknown error')}\n\n"
+                    text += result.get('message', 'Import operation failed')
                 
                 return self._success_response(text)
 
