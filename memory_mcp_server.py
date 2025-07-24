@@ -906,8 +906,86 @@ class SQLiteBackend(MemoryBackend):
                 END
             """)
             
+            # Phase 1: 建立 v2 高效能表結構
+            self._init_v2_tables(conn)
+            
             conn.commit()
             logger.info(f"SQLite database initialized at: {self.db_path}")
+    
+    def _init_v2_tables(self, conn):
+        """初始化 v2 高效能表結構"""
+        # 建立 projects_v2 表 (INT 主鍵)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS projects_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_key TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # 建立 memory_entries_v2 表 (INT 外鍵)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_entries_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                title TEXT,
+                category TEXT,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects_v2(id) ON DELETE CASCADE
+            )
+        """)
+        
+        # 建立 v2 索引
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_v2_key ON projects_v2(project_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_v2_project_id ON memory_entries_v2(project_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_v2_category ON memory_entries_v2(category)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_v2_created_at ON memory_entries_v2(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_v2_updated_at ON memory_entries_v2(updated_at)")
+        
+        # 建立 v2 FTS5 全文搜尋表
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_entries_v2_fts USING fts5(
+                title, category, content,
+                content='memory_entries_v2',
+                content_rowid='id'
+            )
+        """)
+        
+        # 建立 v2 FTS5 觸發器
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS memory_v2_fts_insert AFTER INSERT ON memory_entries_v2 BEGIN
+                INSERT INTO memory_entries_v2_fts(rowid, title, category, content) 
+                VALUES (new.id, COALESCE(new.title, ''), COALESCE(new.category, ''), new.content);
+            END
+        """)
+        
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS memory_v2_fts_delete AFTER DELETE ON memory_entries_v2 BEGIN
+                DELETE FROM memory_entries_v2_fts WHERE rowid = old.id;
+            END
+        """)
+        
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS memory_v2_fts_update AFTER UPDATE ON memory_entries_v2 BEGIN
+                DELETE FROM memory_entries_v2_fts WHERE rowid = old.id;
+                INSERT INTO memory_entries_v2_fts(rowid, title, category, content) 
+                VALUES (new.id, COALESCE(new.title, ''), COALESCE(new.category, ''), new.content);
+            END
+        """)
+        
+        # 建立遷移狀態表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS migration_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
     
     def save_memory(self, project_id: str, content: str, title: str = "", category: str = "") -> bool:
         """儲存記憶到 SQLite 資料庫"""
