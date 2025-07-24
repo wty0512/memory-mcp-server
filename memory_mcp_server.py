@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from collections import Counter
 import difflib
 import re
 import time
@@ -251,313 +250,12 @@ class MemoryBackend(ABC):
         """取得記憶統計資訊"""
         pass
 
-
-class ProjectRecommender:
-    """智能專案推薦引擎"""
-    
-    def __init__(self, backend: MemoryBackend):
-        self.backend = backend
-    
-    def extract_keywords(self, content: str, max_keywords: int = 10) -> List[str]:
-        """從內容中提取關鍵字"""
-        # 移除標點符號和特殊字符，保留中英文
-        text = re.sub(r'[^\w\s\u4e00-\u9fff]', ' ', content.lower())
-        
-        # 分詞（簡單的空格分割）
-        words = text.split()
-        
-        # 過濾短詞和常見詞
-        stop_words = {
-            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
-            '是', '的', '了', '在', '有', '和', '與', '或', '但', '如果', '因為', '所以', '這', '那',
-            '我', '你', '他', '她', '它', '我們', '你們', '他們', '一個', '這個', '那個', '什麼', '怎麼'
-        }
-        
-        # 過濾並計算詞頻
-        filtered_words = [word for word in words if len(word) > 2 and word not in stop_words]
-        word_counts = Counter(filtered_words)
-        
-        # 返回最常見的關鍵字
-        return [word for word, count in word_counts.most_common(max_keywords)]
-    
-    def calculate_project_similarity(self, keywords: List[str], project_info: Dict) -> float:
-        """計算專案與關鍵字的相似度"""
-        project_name = project_info.get('name', '').lower()
-        project_description = project_info.get('description', '').lower()
-        
-        # 提取專案名稱中的關鍵字
-        project_keywords = self.extract_keywords(f"{project_name} {project_description}", max_keywords=20)
-        
-        if not project_keywords:
-            return 0.0
-        
-        # 計算關鍵字重疊度
-        keyword_set = set(keywords)
-        project_keyword_set = set(project_keywords)
-        
-        intersection = keyword_set.intersection(project_keyword_set)
-        union = keyword_set.union(project_keyword_set)
-        
-        if not union:
-            return 0.0
-        
-        # Jaccard 相似度
-        jaccard_similarity = len(intersection) / len(union)
-        
-        # 名稱匹配加權
-        name_similarity = 0.0
-        for keyword in keywords:
-            if keyword in project_name:
-                name_similarity += 0.3
-        
-        # 組合相似度
-        total_similarity = jaccard_similarity + min(name_similarity, 0.5)
-        return min(total_similarity, 1.0)
-    
-    def recommend_projects(self, content: str, max_recommendations: int = 3) -> List[Dict]:
-        """推薦相關專案"""
-        keywords = self.extract_keywords(content)
-        if not keywords:
-            return []
-        
-        projects = self.backend.list_projects()
-        if not projects:
-            return []
-        
-        # 計算每個專案的相似度
-        project_similarities = []
-        for project in projects:
-            similarity = self.calculate_project_similarity(keywords, project)
-            if similarity > 0.1:  # 只考慮相似度大於 0.1 的專案
-                project_similarities.append({
-                    'project': project,
-                    'similarity': similarity
-                })
-        
-        # 按相似度排序
-        project_similarities.sort(key=lambda x: x['similarity'], reverse=True)
-        
-        # 返回前 N 個推薦
-        recommendations = []
-        for item in project_similarities[:max_recommendations]:
-            recommendations.append({
-                'id': item['project']['name'],
-                'name': item['project']['name'],
-                'description': item['project'].get('description', ''),
-                'similarity': item['similarity']
-            })
-        
-        return recommendations
-    
-    def suggest_project_name(self, content: str) -> str:
-        """根據內容建議專案名稱"""
-        keywords = self.extract_keywords(content, max_keywords=3)
-        
-        if not keywords:
-            # 如果沒有關鍵字，使用時間戳
-            timestamp = datetime.now().strftime("%Y%m%d")
-            return f"project-{timestamp}"
-        
-        # 組合關鍵字作為專案名稱
-        project_name = "-".join(keywords[:2])  # 最多使用前兩個關鍵字
-        
-        # 清理專案名稱
-        project_name = re.sub(r'[^\w\-\u4e00-\u9fff]', '', project_name)
-        project_name = project_name.lower()
-        
-        return project_name if project_name else f"project-{datetime.now().strftime('%Y%m%d')}"
+    @abstractmethod
+    def rename_project(self, old_project_id: str, new_project_id: str) -> bool:
+        """重新命名專案"""
+        pass
 
 
-class InteractiveMemorySaver:
-    """互動式記憶儲存管理器"""
-    
-    def __init__(self, backend: MemoryBackend, recommender: ProjectRecommender):
-        self.backend = backend
-        self.recommender = recommender
-        self.pending_saves = {}  # 儲存待處理的儲存請求
-    
-    def start_interactive_save(self, content: str, title: str = "", category: str = "") -> str:
-        """開始互動式儲存流程"""
-        # 生成唯一的會話 ID
-        session_id = f"save_{int(time.time())}"
-        
-        # 獲取推薦專案
-        recommendations = self.recommender.recommend_projects(content)
-        
-        # 儲存待處理的請求（包含推薦結果）
-        self.pending_saves[session_id] = {
-            'content': content,
-            'title': title,
-            'category': category,
-            'timestamp': time.time(),
-            'recommendations': recommendations  # 儲存推薦結果
-        }
-        
-        if recommendations:
-            # 有推薦專案
-            response = f"我準備儲存這個內容到專案記憶。\n建議的相關專案：\n"
-            for i, rec in enumerate(recommendations, 1):
-                desc = f" - {rec['description']}" if rec['description'] else ""
-                response += f"{i}. {rec['name']}{desc}\n"
-            
-            response += f"\n請選擇編號 (1-{len(recommendations)})，或回覆：\n"
-            response += "- '列出所有專案' 查看所有現有專案\n"
-            response += "- '新建專案' 創建新專案\n"
-            response += f"\n會話 ID: {session_id}"
-            
-            return response
-        else:
-            # 沒有推薦專案，直接詢問
-            suggested_name = self.recommender.suggest_project_name(content)
-            response = f"沒有找到相關的現有專案。\n"
-            response += f"建議的專案名稱：{suggested_name}\n\n"
-            response += "請選擇：\n"
-            response += f"1. 使用建議名稱 '{suggested_name}'\n"
-            response += "2. 列出所有專案\n"
-            response += "3. 指定其他專案名稱\n"
-            response += f"\n會話 ID: {session_id}"
-            
-            return response
-    
-    def handle_user_choice(self, session_id: str, user_input: str) -> str:
-        """處理用戶選擇"""
-        if session_id not in self.pending_saves:
-            return "錯誤：找不到對應的儲存會話。請重新開始儲存流程。"
-        
-        save_data = self.pending_saves[session_id]
-        content = save_data['content']
-        title = save_data['title']
-        category = save_data['category']
-        recommendations = save_data.get('recommendations', [])  # 使用儲存的推薦結果
-        
-        original_input = user_input.strip()
-        user_input_lower = user_input.strip().lower()
-        
-        # 處理數字選擇（包括負數檢查）
-        if original_input.lstrip('-').isdigit():  # 檢查是否為數字（包括負數）
-            try:
-                choice_num = int(original_input)
-                
-                if choice_num <= 0:
-                    # 負數或零都是無效選擇
-                    if recommendations:
-                        return f"❌ 請選擇 1-{len(recommendations)} 之間的數字，或輸入其他指令。"
-                    else:
-                        return f"❌ 請選擇有效的選項編號，或輸入專案名稱。"
-                
-                if recommendations and 1 <= choice_num <= len(recommendations):
-                    # 選擇推薦的專案
-                    selected_project = recommendations[choice_num - 1]
-                    project_id = selected_project['id']
-                    
-                    # 執行儲存
-                    success = self.backend.save_memory(project_id, content, title, category)
-                    
-                    # 清理會話
-                    del self.pending_saves[session_id]
-                    
-                    if success:
-                        return f"✅ 已儲存到專案 '{project_id}'。"
-                    else:
-                        return f"❌ 儲存到專案 '{project_id}' 失敗。"
-                elif recommendations:
-                    # 有推薦專案但數字超出範圍
-                    return f"❌ 請選擇 1-{len(recommendations)} 之間的數字，或輸入其他指令。"
-                else:
-                    # 沒有推薦專案時的數字選擇處理
-                    suggested_name = self.recommender.suggest_project_name(content)
-                    if choice_num == 1:
-                        # 使用建議名稱
-                        success = self.backend.save_memory(suggested_name, content, title, category)
-                        del self.pending_saves[session_id]
-                        if success:
-                            return f"✅ 已儲存到新專案 '{suggested_name}'。"
-                        else:
-                            return f"❌ 儲存到新專案 '{suggested_name}' 失敗。"
-                    elif choice_num == 2:
-                        # 列出所有專案
-                        projects = self.backend.list_projects()
-                        response = f"所有現有專案：\n"
-                        for i, project in enumerate(projects, 1):
-                            response += f"{i}. {project['name']}\n"
-                        response += f"\n請告訴我要儲存到哪個專案，或輸入新專案名稱。\n"
-                        response += f"會話 ID: {session_id}"
-                        return response
-                    elif choice_num == 3:
-                        # 指定其他專案名稱
-                        response = f"請輸入新的專案名稱：\n"
-                        response += f"會話 ID: {session_id}"
-                        return response
-                    else:
-                        return f"❌ 請選擇 1-3 之間的數字，或輸入其他指令。"
-                            
-            except ValueError:
-                # 理論上不會到這裡，但以防萬一
-                pass
-        
-        # 處理文字指令
-        if '列出' in user_input or 'list' in user_input or '所有專案' in user_input:
-            # 列出所有專案
-            projects = self.backend.list_projects()
-            response = f"所有現有專案：\n"
-            for i, project in enumerate(projects, 1):
-                response += f"{i}. {project['name']}\n"
-            response += f"\n請告訴我要儲存到哪個專案，或輸入新專案名稱。\n"
-            response += f"會話 ID: {session_id}"
-            return response
-        
-        elif '新建' in user_input_lower or 'new' in user_input_lower or '創建' in user_input_lower:
-            # 創建新專案
-            suggested_name = self.recommender.suggest_project_name(content)
-            response = f"創建新專案。建議名稱：{suggested_name}\n\n"
-            response += "請輸入專案名稱，或回覆 '使用建議' 使用建議名稱。\n"
-            response += f"會話 ID: {session_id}"
-            return response
-        
-        elif '使用建議' in user_input or 'use suggestion' in user_input:
-            # 使用建議的專案名稱
-            suggested_name = self.recommender.suggest_project_name(content)
-            
-            # 執行儲存
-            success = self.backend.save_memory(suggested_name, content, title, category)
-            
-            # 清理會話
-            del self.pending_saves[session_id]
-            
-            if success:
-                return f"✅ 已儲存到新專案 '{suggested_name}'。"
-            else:
-                return f"❌ 儲存到新專案 '{suggested_name}' 失敗。"
-        
-        else:
-            # 將用戶輸入當作專案名稱（但排除純數字的情況，因為純數字應該是選擇編號）
-            # 清理專案名稱
-            project_id = re.sub(r'[^\w\-\u4e00-\u9fff]', '-', original_input)
-            
-            if project_id and project_id != '-':
-                # 執行儲存
-                success = self.backend.save_memory(project_id, content, title, category)
-                
-                # 清理會話
-                del self.pending_saves[session_id]
-                
-                if success:
-                    return f"✅ 已儲存到專案 '{project_id}'。"
-                else:
-                    return f"❌ 儲存到專案 '{project_id}' 失敗。"
-            else:
-                return "❌ 專案名稱不能為空或只包含特殊字符。請重新輸入有效的專案名稱。"
-    
-    def cleanup_old_sessions(self, max_age_seconds: int = 3600):
-        """清理過期的會話"""
-        current_time = time.time()
-        expired_sessions = [
-            session_id for session_id, data in self.pending_saves.items()
-            if current_time - data['timestamp'] > max_age_seconds
-        ]
-        
-        for session_id in expired_sessions:
-            del self.pending_saves[session_id]
 
 class MarkdownMemoryManager(MemoryBackend):
     """
@@ -1052,6 +750,51 @@ class MarkdownMemoryManager(MemoryBackend):
         except Exception as e:
             logger.error(f"Error getting memory stats for {project_id}: {e}")
             return {'exists': False, 'error': str(e)}
+
+    def rename_project(self, old_project_id: str, new_project_id: str) -> bool:
+        """重新命名專案（移動檔案並更新標題）"""
+        try:
+            old_file = self.get_memory_file(old_project_id)
+            new_file = self.get_memory_file(new_project_id)
+            
+            # 檢查舊檔案是否存在
+            if not old_file.exists():
+                logger.error(f"Project {old_project_id} does not exist")
+                return False
+            
+            # 檢查新檔案是否已存在
+            if new_file.exists():
+                logger.error(f"Project {new_project_id} already exists")
+                return False
+            
+            # 使用檔案鎖定進行安全重命名
+            with FileLock(old_file):
+                # 讀取原始內容
+                content = old_file.read_text(encoding='utf-8')
+                
+                # 更新檔案標題
+                lines = content.split('\n')
+                if lines and lines[0].startswith('# AI Memory for '):
+                    lines[0] = f"# AI Memory for {new_project_id}"
+                
+                updated_content = '\n'.join(lines)
+                
+                # 寫入新檔案
+                with AtomicFileWriter(new_file) as f:
+                    f.write(updated_content)
+                
+                # 刪除舊檔案
+                old_file.unlink()
+                
+                logger.info(f"Project renamed from {old_project_id} to {new_project_id}")
+                return True
+                
+        except TimeoutError as e:
+            logger.error(f"Timeout acquiring lock for renaming {old_project_id}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error renaming project from {old_project_id} to {new_project_id}: {e}")
+            return False
 
 class SQLiteBackend(MemoryBackend):
     """
@@ -1728,6 +1471,56 @@ class SQLiteBackend(MemoryBackend):
         except Exception as e:
             logger.error(f"Error getting memory stats for {project_id}: {e}")
             return {'exists': False, 'error': str(e)}
+
+    def rename_project(self, old_project_id: str, new_project_id: str) -> bool:
+        """重新命名專案（更新資料庫中的專案 ID）"""
+        try:
+            with self.get_connection() as conn:
+                # 檢查舊專案是否存在
+                cursor = conn.execute("SELECT COUNT(*) FROM projects WHERE id = ?", (old_project_id,))
+                if cursor.fetchone()[0] == 0:
+                    logger.error(f"Project {old_project_id} does not exist")
+                    return False
+                
+                # 檢查新專案 ID 是否已存在
+                cursor = conn.execute("SELECT COUNT(*) FROM projects WHERE id = ?", (new_project_id,))
+                if cursor.fetchone()[0] > 0:
+                    logger.error(f"Project {new_project_id} already exists")
+                    return False
+                
+                # 開始事務
+                conn.execute("BEGIN TRANSACTION")
+                
+                try:
+                    # 更新專案表
+                    conn.execute("""
+                        UPDATE projects 
+                        SET id = ?, updated_at = CURRENT_TIMESTAMP 
+                        WHERE id = ?
+                    """, (new_project_id, old_project_id))
+                    
+                    # 更新記憶條目表
+                    conn.execute("""
+                        UPDATE memory_entries 
+                        SET project_id = ? 
+                        WHERE project_id = ?
+                    """, (new_project_id, old_project_id))
+                    
+                    # 提交事務
+                    conn.execute("COMMIT")
+                    
+                    logger.info(f"Project renamed from {old_project_id} to {new_project_id}")
+                    return True
+                    
+                except Exception as e:
+                    # 回滾事務
+                    conn.execute("ROLLBACK")
+                    logger.error(f"Error during rename transaction: {e}")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Error renaming project from {old_project_id} to {new_project_id}: {e}")
+            return False
     
     def _count_entries(self, conn, project_id: str) -> int:
         """計算專案的記憶條目數量"""
@@ -2399,9 +2192,6 @@ class MCPServer:
         self.memory_manager = backend or MarkdownMemoryManager()
         self.version = "1.0.0"
         
-        # 初始化智能儲存組件
-        self.recommender = ProjectRecommender(self.memory_manager)
-        self.interactive_saver = InteractiveMemorySaver(self.memory_manager, self.recommender)
         
         # 初始化匯入器
         self.importer = ProjectMemoryImporter(self.memory_manager)
@@ -2486,46 +2276,6 @@ class MCPServer:
                         }
                     },
                     'required': ['project_id', 'content']
-                }
-            },
-            {
-                'name': 'start_intelligent_save',
-                'description': '開始智能儲存流程，AI會推薦相關專案 / Start intelligent save process with project recommendations',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'content': {
-                            'type': 'string',
-                            'description': 'Content to save to project memory'
-                        },
-                        'title': {
-                            'type': 'string',
-                            'description': 'Optional title for the project memory entry'
-                        },
-                        'category': {
-                            'type': 'string',
-                            'description': 'Optional category/tag for the project memory entry'
-                        }
-                    },
-                    'required': ['content']
-                }
-            },
-            {
-                'name': 'handle_save_choice',
-                'description': '處理用戶在智能儲存流程中的選擇 / Handle user choice in intelligent save process',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'session_id': {
-                            'type': 'string',
-                            'description': 'Session ID from start_intelligent_save'
-                        },
-                        'user_input': {
-                            'type': 'string',
-                            'description': 'User\'s choice or input'
-                        }
-                    },
-                    'required': ['session_id', 'user_input']
                 }
             },
             {
@@ -2822,6 +2572,24 @@ class MCPServer:
                 }
             },
             {
+                'name': 'rename_project',
+                'description': '重新命名專案 / Rename a project',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'old_project_id': {
+                            'type': 'string',
+                            'description': 'Current project identifier'
+                        },
+                        'new_project_id': {
+                            'type': 'string',
+                            'description': 'New project identifier'
+                        }
+                    },
+                    'required': ['old_project_id', 'new_project_id']
+                }
+            },
+            {
                 'name': 'import_project_memory_universal',
                 'description': '通用匯入專案記憶 / Universal import project memory from various formats (auto-detect)',
                 'inputSchema': {
@@ -3048,27 +2816,6 @@ No projects found. You can start creating your first memory!
                     f"Memory {'saved' if success else 'failed to save'} for project: {arguments['project_id']}"
                 )
 
-            elif tool_name == 'start_intelligent_save':
-                # 清理過期會話
-                self.interactive_saver.cleanup_old_sessions()
-                
-                # 開始智能儲存流程
-                response = self.interactive_saver.start_interactive_save(
-                    arguments['content'],
-                    arguments.get('title', ''),
-                    arguments.get('category', '')
-                )
-                
-                return self._success_response(response)
-
-            elif tool_name == 'handle_save_choice':
-                # 處理用戶選擇
-                response = self.interactive_saver.handle_user_choice(
-                    arguments['session_id'],
-                    arguments['user_input']
-                )
-                
-                return self._success_response(response)
 
             elif tool_name == 'get_project_memory':
                 memory = self.memory_manager.get_memory(arguments['project_id'])
@@ -3220,6 +2967,23 @@ No projects found. You can start creating your first memory!
                     text = result['message']
                 
                 return self._success_response(text)
+
+            elif tool_name == 'rename_project':
+                # 重新命名專案
+                success = self.memory_manager.rename_project(
+                    arguments['old_project_id'],
+                    arguments['new_project_id']
+                )
+                
+                if success:
+                    return self._success_response(
+                        f"✅ Project successfully renamed from '{arguments['old_project_id']}' to '{arguments['new_project_id']}'"
+                    )
+                else:
+                    return self._error_response(
+                        f"❌ Failed to rename project from '{arguments['old_project_id']}' to '{arguments['new_project_id']}'. "
+                        f"Check if the old project exists and the new name is not already taken."
+                    )
 
             elif tool_name == 'sync_markdown_to_sqlite':
                 # 檢查當前後端是否為 SQLite

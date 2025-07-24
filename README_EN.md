@@ -18,7 +18,6 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
 - 🎯 Perfect integration with Claude Desktop / Claude Code / Cursor / Rovo Dev
 - 🚀 Support for Rovo Dev's `acli` command management
 - 🌐 **Global Memory**: Cross-project knowledge base for storing universal standards and best practices
-- 🧠 **Intelligent Save**: AI-powered project recommendations, automatically analyze content and suggest most relevant projects
 - 🐍 Pure Python implementation with no additional dependencies
 
 ## 🛠️ Installation and Setup
@@ -208,51 +207,6 @@ Category: development
 Search for "SQLite" in my-project
 ```
 
-### 🧠 Intelligent Save Feature
-
-The intelligent save feature uses AI to analyze your content and automatically recommend the most relevant existing projects, helping you avoid creating too many similar projects.
-
-**How to use:**
-```
-Use the start_intelligent_save tool to begin the intelligent save process:
-
-Parameters:
-- content: Content to save (required)
-- title: Optional title
-- category: Optional category
-
-The system will:
-1. Analyze content keywords and semantics
-2. Calculate similarity with existing projects
-3. Recommend the most relevant 2-3 projects
-4. Provide interactive selection interface
-```
-
-**Interactive Flow:**
-```
-1. System recommends relevant projects:
-   [1] Project A (similarity: 85%)
-   [2] Project B (similarity: 72%)
-   [3] Project C (similarity: 68%)
-   [4] View all projects
-   [5] Create new project
-
-2. You can choose to:
-   - Enter a number to select recommended project
-   - View all projects list
-   - Create new project with specified name
-   - Enter "cancel" to abort operation
-
-3. Content is automatically saved to selected project
-```
-
-**Smart Recommendation Algorithm:**
-- **Keyword Matching**: Analyze important terms in content
-- **Semantic Similarity**: Use TF-IDF to calculate text similarity
-- **Project Activity**: Prioritize recently active projects
-- **Category Weighting**: Projects with same category get bonus points
-
-For detailed usage examples, see: [Intelligent Save Usage Guide](intelligent_save_usage_example.md)
 
 ### Global Memory Operations
 
