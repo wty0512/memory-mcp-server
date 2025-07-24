@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Python Memory MCP Server
-一個基於 Python 的 Model Context Protocol 伺服器，提供智能記憶管理功能，支援 SQLite 和 Markdown 雙後端儲存
+一個基於 Python 的 Model Context Protocol 伺服器，提供記憶管理功能，支援 SQLite 和 Markdown 雙後端儲存
 
-A Python-based Model Context Protocol server providing intelligent memory management 
+A Python-based Model Context Protocol server providing memory management 
 with SQLite and Markdown dual backend storage support.
 
 Features / 功能特色:
@@ -11,8 +11,8 @@ Features / 功能特色:
   SQLite 後端（預設）：高效能資料庫，支援全文搜尋
 - Markdown Backend: Human-readable format for version control
   Markdown 後端：人類可讀格式，便於版本控制
-- Intelligent Sync: Auto-sync Markdown projects to SQLite
-  智能同步：自動將 Markdown 專案同步到 SQLite
+- Auto Sync: Auto-sync Markdown projects to SQLite
+  自動同步：自動將 Markdown 專案同步到 SQLite
 - Auto Project Display: Show project list on startup
   自動專案顯示：啟動時顯示專案列表
 """
@@ -253,7 +253,7 @@ class MemoryBackend(ABC):
     @abstractmethod
     def rename_project(self, old_project_id: str, new_project_id: str) -> bool:
         """重新命名專案"""
-        pass
+        raise NotImplementedError("Subclasses must implement rename_project method")
 
 
 
@@ -1492,19 +1492,29 @@ class SQLiteBackend(MemoryBackend):
                 conn.execute("BEGIN TRANSACTION")
                 
                 try:
-                    # 更新專案表
-                    conn.execute("""
-                        UPDATE projects 
-                        SET id = ?, updated_at = CURRENT_TIMESTAMP 
-                        WHERE id = ?
-                    """, (new_project_id, old_project_id))
-                    
-                    # 更新記憶條目表
+                    # 先更新記憶條目表（子表）
                     conn.execute("""
                         UPDATE memory_entries 
                         SET project_id = ? 
                         WHERE project_id = ?
                     """, (new_project_id, old_project_id))
+                    
+                    # 再更新專案表（父表）- 使用 INSERT + DELETE 方式避免外鍵約束
+                    # 先獲取原專案資料
+                    cursor = conn.execute("""
+                        SELECT name, created_at FROM projects WHERE id = ?
+                    """, (old_project_id,))
+                    project_data = cursor.fetchone()
+                    
+                    if project_data:
+                        # 插入新專案記錄
+                        conn.execute("""
+                            INSERT INTO projects (id, name, created_at, updated_at)
+                            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                        """, (new_project_id, project_data[0], project_data[1]))
+                        
+                        # 刪除舊專案記錄
+                        conn.execute("DELETE FROM projects WHERE id = ?", (old_project_id,))
                     
                     # 提交事務
                     conn.execute("COMMIT")
@@ -1532,8 +1542,8 @@ class DataSyncManager:
     資料同步管理器 - 負責 Markdown 到 SQLite 的同步
     Data Sync Manager - Handles Markdown to SQLite synchronization
     
-    提供智能同步功能，包括相似度檢測、內容合併和衝突解決
-    Provides intelligent sync features including similarity detection, content merging, and conflict resolution
+    提供自動同步功能，包括相似度檢測、內容合併和衝突解決
+    Provides auto sync features including similarity detection, content merging, and conflict resolution
     
     Sync Modes / 同步模式:
     - auto: 自動合併 / Automatic merging
@@ -1708,7 +1718,7 @@ class DataSyncManager:
         # 簡化的合併邏輯 - 將 Markdown 內容追加到 SQLite 內容
         markdown_entries = self.parse_markdown_entries(markdown_content)
         
-        # 這裡簡化處理，實際應該更智能地去重和排序
+        # 這裡簡化處理，實際應該更好地去重和排序
         return markdown_entries
     
     def parse_markdown_entries(self, markdown_content):
@@ -2454,7 +2464,7 @@ class MCPServer:
             },
             {
                 'name': 'sync_markdown_to_sqlite',
-                'description': '同步 Markdown 專案到 SQLite / Sync all Markdown projects to SQLite backend with intelligent merging',
+                'description': '同步 Markdown 專案到 SQLite / Sync all Markdown projects to SQLite backend with auto merging',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
