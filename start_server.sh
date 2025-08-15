@@ -15,4 +15,4 @@ chmod +x memory_mcp_server.py
 
 # 啟動伺服器
 echo "Starting Markdown Memory MCP Server..."
-python3 memory_mcp_server.py
+python3 memory_mcp_server.py --backend=sqlite --db-path="$1"
