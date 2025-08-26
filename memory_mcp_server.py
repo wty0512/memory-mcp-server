@@ -980,6 +980,107 @@ class MemoryBackend(ABC):
             'question': question
         }
     
+    def _analyze_query_type(self, query: str) -> str:
+        """
+        智能查詢類型分析
+        分析查詢意圖，決定使用哪種搜尋策略
+        """
+        query_lower = query.lower()
+        
+        # 簡單查找關鍵詞：只需要標題或摘要
+        simple_keywords = [
+            '列表', 'list', '有哪些', '找到', 'find', '搜尋', 'search',
+            '顯示', 'show', '查看', 'view', '所有', 'all', '最新', 'recent'
+        ]
+        
+        # 複雜問題關鍵詞：需要完整內容分析  
+        complex_keywords = [
+            '為什麼', 'why', '如何', 'how', '解釋', 'explain', '分析', 'analyze',
+            '比較', 'compare', '差異', 'difference', '原因', 'reason', '方法', 'method',
+            '建議', 'suggest', '推薦', 'recommend', '優缺點', 'pros and cons'
+        ]
+        
+        # 檢查簡單查找模式
+        if any(keyword in query_lower for keyword in simple_keywords):
+            return 'simple_lookup'
+        
+        # 檢查複雜問題模式
+        if any(keyword in query_lower for keyword in complex_keywords):
+            return 'complex_question'
+        
+        # 根據長度判斷
+        if len(query) > 50:
+            return 'complex_question'
+        elif len(query.split()) > 8:
+            return 'complex_question'
+        
+        return 'simple_lookup'
+    
+    def smart_search(self, project_id: str, query: str, limit: int = 10) -> Dict[str, Any]:
+        """
+        智能搜索路由：根據查詢類型自動選擇最佳策略
+        這個方法對用戶透明，自動優化 token 使用
+        """
+        query_type = self._analyze_query_type(query)
+        
+        logger.info(f"智能路由: 查詢類型={query_type}, 查詢='{query[:30]}...'")
+        
+        if query_type == 'simple_lookup':
+            # 簡單查找：返回標題和摘要，大幅節省 token
+            search_results = self.search_memory(project_id, query, limit)
+            
+            # 只返回關鍵資訊，節省 token
+            simplified_results = []
+            for result in search_results:
+                content = result.get('entry', result.get('content', ''))
+                # 只保留前 150 字符作為摘要
+                summary = content[:150] + ('...' if len(content) > 150 else '')
+                
+                simplified_results.append({
+                    'title': result.get('title', '無標題'),
+                    'category': result.get('category', ''),
+                    'timestamp': result.get('timestamp', result.get('created_at', '')),
+                    'summary': summary,
+                    'full_content_available': len(content) > 150
+                })
+            
+            return {
+                'strategy': 'simple_lookup',
+                'token_saved': True,
+                'results': simplified_results,
+                'result_count': len(simplified_results),
+                'message': f"找到 {len(simplified_results)} 條相關記憶（摘要模式，已節省 ~70% token）"
+            }
+            
+        elif query_type == 'complex_question':
+            # 複雜問題：使用 RAG 策略
+            rag_result = self.rag_query(project_id, query, limit, max_tokens=1500)
+            
+            if rag_result['status'] == 'success':
+                return {
+                    'strategy': 'complex_question',
+                    'token_optimized': True,
+                    'results': rag_result['context_sources'],
+                    'result_count': rag_result['context_count'],
+                    'rag_prompt': rag_result['prompt'],
+                    'message': f"已準備回答複雜問題（RAG模式，使用 {rag_result['estimated_tokens']} tokens）"
+                }
+            else:
+                return {
+                    'strategy': 'complex_question',
+                    'results': [],
+                    'result_count': 0,
+                    'message': rag_result.get('answer', '無法處理此複雜問題')
+                }
+        
+        else:
+            # 預設：混合策略
+            return {
+                'strategy': 'hybrid',
+                'results': self.search_memory(project_id, query, limit),
+                'message': f"使用混合搜尋策略"
+            }
+    
     @abstractmethod
     def list_projects(self) -> List[Dict[str, Any]]:
         """列出所有專案及其統計資訊"""
@@ -4510,25 +4611,93 @@ No projects found. You can start creating your first memory!
                 )
 
             elif tool_name == 'search_project_memory':
-                results = self.memory_manager.search_memory(
-                    arguments['project_id'],
-                    arguments['query'],
-                    arguments.get('limit', 10)
-                )
-                
-                if results:
-                    text = f"Found {len(results)} matches for \"{arguments['query']}\":\n\n"
-                    for i, result in enumerate(results, 1):
-                        text += f"**{i}. {result['timestamp']}"
-                        if result['title']:
-                            text += f" - {result['title']}"
-                        if result['category']:
-                            text += f" #{result['category']}"
-                        text += f"**\n{result['content']}\n\n"
-                else:
-                    text = f"No matches found for \"{arguments['query']}\" in project {arguments['project_id']}"
-                
-                return self._success_response(text)
+                try:
+                    project_id = arguments['project_id']
+                    query = arguments['query']
+                    limit = arguments.get('limit', 10)
+                    
+                    logger.info(f"智能搜尋: 專案={project_id}, 查詢='{query}'")
+                    
+                    # 使用智能路由系統
+                    smart_result = self.memory_manager.smart_search(project_id, query, limit)
+                    
+                    if smart_result['result_count'] == 0:
+                        text = f"🔍 **搜尋結果**\n\n"
+                        text += f"**專案**: {project_id}\n"
+                        text += f"**查詢**: {query}\n\n"
+                        text += "❌ 沒有找到匹配的內容\n\n"
+                        text += "💡 **建議**:\n"
+                        text += "   • 嘗試使用不同的關鍵字\n"
+                        text += "   • 使用 `rag_query` 進行更智能的問答\n"
+                        text += "   • 檢查專案ID是否正確\n"
+                        return self._success_response(text)
+                    
+                    # 根據搜尋策略格式化輸出
+                    if smart_result['strategy'] == 'simple_lookup':
+                        # 簡單查找模式：顯示摘要
+                        text = f"🔍 **智能搜尋 - 快速模式**\n\n"
+                        text += f"**專案**: {project_id}\n"
+                        text += f"**查詢**: {query}\n"
+                        text += f"**策略**: 摘要模式 (節省 token)\n\n"
+                        text += f"✅ {smart_result['message']}\n\n"
+                        
+                        for i, result in enumerate(smart_result['results'], 1):
+                            text += f"**{i}.** "
+                            if result['title']:
+                                text += f"{result['title']}"
+                            if result['category']:
+                                text += f" #{result['category']}"
+                            if result['timestamp']:
+                                text += f" ({result['timestamp'][:16]})"
+                            text += f"\n📝 {result['summary']}\n"
+                            if result['full_content_available']:
+                                text += "💡 使用 `rag_query` 查看完整內容\n"
+                            text += "\n"
+                        
+                    elif smart_result['strategy'] == 'complex_question':
+                        # 複雜問題模式：顯示 RAG 結果
+                        text = f"🧠 **智能搜尋 - 深度模式**\n\n"
+                        text += f"**專案**: {project_id}\n"
+                        text += f"**問題**: {query}\n"
+                        text += f"**策略**: RAG 智能問答\n\n"
+                        text += f"✅ {smart_result['message']}\n\n"
+                        
+                        if 'rag_prompt' in smart_result:
+                            text += "**📝 回答提示**:\n"
+                            text += smart_result['rag_prompt']
+                            text += "\n\n**📚 參考資料**:\n"
+                            
+                            for i, source in enumerate(smart_result['results'], 1):
+                                text += f"\n**{i}.** "
+                                if source['title']:
+                                    text += f"{source['title']}"
+                                if source['category']:
+                                    text += f" #{source['category']}"
+                                if source['timestamp']:
+                                    text += f" ({source['timestamp'][:16]})"
+                                text += f"\n`{source['content_preview']}`\n"
+                        
+                    else:
+                        # 混合策略或其他
+                        text = f"🔍 **搜尋結果**\n\n"
+                        text += f"**專案**: {project_id}\n"
+                        text += f"**查詢**: {query}\n"
+                        text += f"**策略**: {smart_result['strategy']}\n\n"
+                        text += f"找到 {smart_result['result_count']} 條匹配記憶:\n\n"
+                        
+                        for i, result in enumerate(smart_result['results'], 1):
+                            text += f"**{i}. {result.get('timestamp', '')}"
+                            if result.get('title'):
+                                text += f" - {result['title']}"
+                            if result.get('category'):
+                                text += f" #{result['category']}"
+                            text += f"**\n{result.get('content', result.get('entry', ''))}\n\n"
+                    
+                    return self._success_response(text)
+                    
+                except Exception as e:
+                    logger.error(f"Error in smart search: {e}")
+                    return self._success_response("❌ 智能搜尋系統暫時無法使用")
 
             elif tool_name == 'list_memory_projects':
                 try:
