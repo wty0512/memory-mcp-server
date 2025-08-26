@@ -53,6 +53,131 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 自定義異常類別
+class ValidationError(ValueError):
+    """輸入驗證錯誤"""
+    pass
+
+class SecurityError(Exception):
+    """安全性相關錯誤"""
+    pass
+
+# 輸入驗證工具
+class InputValidator:
+    """輸入參數驗證器"""
+    
+    # 專案ID規則：只允許字母、數字、底線、連字號，長度限制
+    PROJECT_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,100}$')
+    
+    # 內容長度限制 (50MB)
+    MAX_CONTENT_LENGTH = 50 * 1024 * 1024
+    MAX_TITLE_LENGTH = 500
+    MAX_CATEGORY_LENGTH = 100
+    
+    @classmethod
+    def validate_project_id(cls, project_id: str) -> str:
+        """驗證專案ID格式"""
+        if not project_id or not isinstance(project_id, str):
+            raise ValidationError("專案ID不能為空且必須為字串")
+        
+        project_id = project_id.strip()
+        if not project_id:
+            raise ValidationError("專案ID不能為空白")
+        
+        if not cls.PROJECT_ID_PATTERN.match(project_id):
+            raise ValidationError(
+                "專案ID只能包含英文字母、數字、底線和連字號，長度不超過100字元"
+            )
+        
+        # 檢查保留字
+        reserved_words = {'global', 'system', 'admin', 'root', 'config'}
+        if project_id.lower() in reserved_words:
+            raise ValidationError(f"'{project_id}' 是保留字，不能作為專案ID")
+        
+        return project_id
+    
+    @classmethod
+    def validate_content(cls, content: str) -> str:
+        """驗證內容格式和長度"""
+        if not isinstance(content, str):
+            raise ValidationError("內容必須為字串")
+        
+        if len(content) > cls.MAX_CONTENT_LENGTH:
+            raise ValidationError(f"內容長度不能超過 {cls.MAX_CONTENT_LENGTH // (1024*1024)} MB")
+        
+        # 檢查是否包含惡意內容
+        if cls._contains_suspicious_patterns(content):
+            raise SecurityError("內容包含可疑模式，可能存在安全風險")
+        
+        return content
+    
+    @classmethod
+    def validate_title(cls, title: str) -> str:
+        """驗證標題格式和長度"""
+        if title is None:
+            return ""
+        
+        if not isinstance(title, str):
+            raise ValidationError("標題必須為字串")
+        
+        title = title.strip()
+        if len(title) > cls.MAX_TITLE_LENGTH:
+            raise ValidationError(f"標題長度不能超過 {cls.MAX_TITLE_LENGTH} 字元")
+        
+        return title
+    
+    @classmethod
+    def validate_category(cls, category: str) -> str:
+        """驗證分類格式和長度"""
+        if category is None:
+            return ""
+        
+        if not isinstance(category, str):
+            raise ValidationError("分類必須為字串")
+        
+        category = category.strip()
+        if len(category) > cls.MAX_CATEGORY_LENGTH:
+            raise ValidationError(f"分類長度不能超過 {cls.MAX_CATEGORY_LENGTH} 字元")
+        
+        # 分類只允許特定字元
+        if category and not re.match(r'^[a-zA-Z0-9_\-\u4e00-\u9fff\s]+$', category):
+            raise ValidationError("分類只能包含英文字母、數字、中文、底線、連字號和空格")
+        
+        return category
+    
+    @classmethod
+    def validate_query(cls, query: str) -> str:
+        """驗證搜尋查詢"""
+        if not isinstance(query, str):
+            raise ValidationError("搜尋查詢必須為字串")
+        
+        query = query.strip()
+        if not query:
+            raise ValidationError("搜尋查詢不能為空")
+        
+        if len(query) > 1000:
+            raise ValidationError("搜尋查詢長度不能超過 1000 字元")
+        
+        return query
+    
+    @classmethod
+    def _contains_suspicious_patterns(cls, content: str) -> bool:
+        """檢查內容是否包含可疑模式"""
+        suspicious_patterns = [
+            r'<script[^>]*>.*?</script>',  # JavaScript
+            r'javascript:',  # JavaScript 協議
+            r'vbscript:',   # VBScript 協議
+            r'on\w+\s*=',   # 事件處理器
+            r'eval\s*\(',   # eval 函數
+            r'exec\s*\(',   # exec 函數
+        ]
+        
+        for pattern in suspicious_patterns:
+            if re.search(pattern, content, re.IGNORECASE | re.DOTALL):
+                return True
+        
+        return False
+
 class FileLock:
     """跨平台檔案鎖定工具類"""
     
@@ -948,6 +1073,12 @@ class SQLiteBackend(MemoryBackend):
         """儲存記憶到新的簡潔表結構"""
         logger.info(f"[SQLITE] Calling save_memory for project: {project_id}")
         try:
+            # 輸入驗證
+            project_id = InputValidator.validate_project_id(project_id)
+            content = InputValidator.validate_content(content)
+            title = InputValidator.validate_title(title)
+            category = InputValidator.validate_category(category)
+            
             # 使用最終表的 add_memory 方法
             entry_id = self.add_memory(
                 project=project_id,
@@ -959,6 +1090,9 @@ class SQLiteBackend(MemoryBackend):
             )
             logger.info(f"[SQLITE] Successfully saved memory with ID: {entry_id}")
             return True
+        except (ValidationError, SecurityError) as e:
+            logger.error(f"[SQLITE] Validation error in save_memory: {e}")
+            return False
         except Exception as e:
             logger.error(f"[SQLITE] Error saving memory: {e}")
             return False
@@ -1012,6 +1146,15 @@ class SQLiteBackend(MemoryBackend):
         logger.info(f"[SQLITE] Smart search for project: {project_id}, query: {query}")
         
         try:
+            # 輸入驗證
+            project_id = InputValidator.validate_project_id(project_id)
+            query = InputValidator.validate_query(query)
+            
+            # 限制 limit 參數範圍
+            if not isinstance(limit, int) or limit < 1 or limit > 100:
+                limit = 10
+                logger.warning(f"Invalid limit parameter, using default: {limit}")
+            
             # 智能判斷查詢類型
             query_type = self._analyze_query_type(query)
             logger.info(f"[SQLITE] Query type detected: {query_type}")
@@ -1028,6 +1171,9 @@ class SQLiteBackend(MemoryBackend):
                 # 默認：混合策略
                 return self._hybrid_search(project_id, query, limit)
                 
+        except (ValidationError, SecurityError) as e:
+            logger.error(f"[SQLITE] Validation error in search_memory: {e}")
+            return []
         except Exception as e:
             logger.error(f"Error in smart search for {project_id}: {e}")
             # 降級到原始搜索
