@@ -63,6 +63,18 @@ class SecurityError(Exception):
     """安全性相關錯誤"""
     pass
 
+class DatabaseError(Exception):
+    """資料庫操作錯誤"""
+    pass
+
+class FileOperationError(Exception):
+    """檔案操作錯誤"""
+    pass
+
+class ConfigurationError(Exception):
+    """配置錯誤"""
+    pass
+
 # 輸入驗證工具
 class InputValidator:
     """輸入參數驗證器"""
@@ -469,8 +481,12 @@ class FileLock:
             
             logger.debug(f"Released lock for {self.file_path}")
             
+        except (OSError, IOError) as e:
+            logger.warning(f"I/O error releasing lock for {self.file_path}: {e}")
+        except PermissionError as e:
+            logger.warning(f"Permission denied releasing lock for {self.file_path}: {e}")
         except Exception as e:
-            logger.warning(f"Error releasing lock for {self.file_path}: {e}")
+            logger.error(f"Unexpected error releasing lock for {self.file_path}: {e}")
         finally:
             self.lock_file = None
             self.locked = False
@@ -500,20 +516,30 @@ class AtomicFileWriter:
             try:
                 self.temp_path.replace(self.file_path)
                 logger.debug(f"Atomic write completed for {self.file_path}")
+            except (OSError, IOError) as e:
+                logger.error(f"I/O error during atomic write for {self.file_path}: {e}")
+                self._cleanup_temp_file()
+                raise FileOperationError(f"原子性寫入失敗: {e}")
+            except PermissionError as e:
+                logger.error(f"Permission denied during atomic write for {self.file_path}: {e}")
+                self._cleanup_temp_file()
+                raise FileOperationError(f"檔案權限錯誤: {e}")
             except Exception as e:
-                logger.error(f"Failed to complete atomic write for {self.file_path}: {e}")
-                # 清理臨時檔案
-                try:
-                    self.temp_path.unlink()
-                except FileNotFoundError:
-                    pass
+                logger.error(f"Unexpected error during atomic write for {self.file_path}: {e}")
+                self._cleanup_temp_file()
                 raise
         else:
             # 失敗：清理臨時檔案
-            try:
-                self.temp_path.unlink()
-            except FileNotFoundError:
-                pass
+            self._cleanup_temp_file()
+    
+    def _cleanup_temp_file(self):
+        """清理臨時檔案"""
+        try:
+            self.temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        except (OSError, IOError) as e:
+            logger.warning(f"Failed to cleanup temp file {self.temp_path}: {e}")
 
 
 class MemoryBackend(ABC):
@@ -712,8 +738,17 @@ class MarkdownMemoryManager(MemoryBackend):
         except TimeoutError as e:
             logger.error(f"Timeout acquiring lock for {project_id}: {e}")
             return False
+        except (ValidationError, SecurityError) as e:
+            logger.error(f"Validation error saving memory for {project_id}: {e}")
+            return False
+        except (OSError, IOError) as e:
+            logger.error(f"I/O error saving memory for {project_id}: {e}")
+            raise FileOperationError(f"檔案操作錯誤: {e}")
+        except PermissionError as e:
+            logger.error(f"Permission denied saving memory for {project_id}: {e}")
+            raise FileOperationError(f"檔案權限錯誤: {e}")
         except Exception as e:
-            logger.error(f"Error saving memory for {project_id}: {e}")
+            logger.error(f"Unexpected error saving memory for {project_id}: {e}")
             return False
 
     def search_memory(self, project_id: str, query: str, limit: int = 10) -> List[Dict[str, str]]:
@@ -1359,8 +1394,13 @@ class SQLiteBackend(MemoryBackend):
             
             return "".join(markdown_parts)
                 
+        except sqlite3.Error as e:
+            logger.error(f"Database error reading memory for {project_id}: {e}")
+            raise DatabaseError(f"資料庫讀取錯誤: {e}")
+        except (ValidationError, SecurityError):
+            raise  # 重新拋出驗證錯誤
         except Exception as e:
-            logger.error(f"Error reading memory for {project_id}: {e}")
+            logger.error(f"Unexpected error reading memory for {project_id}: {e}")
             return None
     
     def search_memory(self, project_id: str, query: str, limit: int = 10) -> List[Dict[str, str]]:
