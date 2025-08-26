@@ -1081,6 +1081,191 @@ class MemoryBackend(ABC):
                 'message': f"使用混合搜尋策略"
             }
     
+    def summarize_project(self, project_id: str, summary_type: str = 'brief', max_entries: int = 20) -> Dict[str, Any]:
+        """
+        生成專案內容摘要
+        根據不同類型提供專案概況
+        """
+        try:
+            # 獲取專案統計資訊
+            stats = self.get_memory_stats(project_id) if hasattr(self, 'get_memory_stats') else {'exists': False}
+            
+            if not stats.get('exists', False):
+                return {
+                    'status': 'not_found',
+                    'message': f'專案 "{project_id}" 不存在或沒有內容',
+                    'suggestions': [
+                        f"使用 save_project_memory 開始記錄專案內容",
+                        f"檢查專案ID拼寫是否正確",
+                        f"使用 list_memory_projects 查看所有可用專案"
+                    ]
+                }
+            
+            # 獲取記憶內容進行分析
+            recent_entries = self.get_recent_memory(project_id, max_entries) if hasattr(self, 'get_recent_memory') else []
+            
+            if summary_type == 'brief':
+                return self._generate_brief_summary(project_id, stats, recent_entries[:5])
+            elif summary_type == 'detailed':
+                return self._generate_detailed_summary(project_id, stats, recent_entries[:15])
+            elif summary_type == 'timeline':
+                return self._generate_timeline_summary(project_id, stats, recent_entries)
+            else:
+                return self._generate_brief_summary(project_id, stats, recent_entries[:5])
+                
+        except Exception as e:
+            logger.error(f"Error generating project summary: {e}")
+            return {
+                'status': 'error',
+                'message': f'生成專案摘要時發生錯誤: {str(e)}'
+            }
+    
+    def _generate_brief_summary(self, project_id: str, stats: Dict, entries: List[Dict]) -> Dict[str, Any]:
+        """生成簡要摘要 (200-300 tokens)"""
+        
+        # 分析分類和主題
+        categories = stats.get('categories', [])
+        entry_count = stats.get('total_entries', 0)
+        
+        # 提取關鍵主題
+        key_topics = []
+        recent_activities = []
+        
+        for entry in entries[:3]:
+            if entry.get('title'):
+                key_topics.append(entry['title'])
+            if entry.get('timestamp'):
+                recent_activities.append(entry['timestamp'][:10])  # 日期部分
+        
+        summary = f"**{project_id}** 是一個包含 {entry_count} 條記憶的專案。"
+        
+        if categories:
+            summary += f"\n\n**主要分類**: {', '.join(categories[:5])}"
+        
+        if key_topics:
+            summary += f"\n**近期主題**: {', '.join(key_topics)}"
+        
+        if recent_activities:
+            summary += f"\n**活動時間**: 最近更新於 {max(recent_activities)}"
+        
+        return {
+            'status': 'success',
+            'type': 'brief',
+            'summary': summary,
+            'key_metrics': {
+                'total_entries': entry_count,
+                'categories': len(categories),
+                'recent_activity': max(recent_activities) if recent_activities else 'Unknown'
+            }
+        }
+    
+    def _generate_detailed_summary(self, project_id: str, stats: Dict, entries: List[Dict]) -> Dict[str, Any]:
+        """生成詳細摘要 (800-1000 tokens)"""
+        
+        categories = stats.get('categories', [])
+        entry_count = stats.get('total_entries', 0)
+        total_words = stats.get('total_words', 0)
+        
+        # 分析內容結構
+        category_analysis = {}
+        timeline_analysis = {}
+        key_topics = []
+        
+        for entry in entries:
+            # 分類分析
+            cat = entry.get('category', '未分類')
+            if cat not in category_analysis:
+                category_analysis[cat] = 0
+            category_analysis[cat] += 1
+            
+            # 時間軸分析
+            if entry.get('timestamp'):
+                date = entry['timestamp'][:7]  # YYYY-MM
+                if date not in timeline_analysis:
+                    timeline_analysis[date] = 0
+                timeline_analysis[date] += 1
+            
+            # 關鍵主題
+            if entry.get('title'):
+                key_topics.append(entry['title'])
+        
+        summary = f"## {project_id} 專案詳細分析\n\n"
+        summary += f"這是一個活躍的專案，包含 {entry_count} 條記憶，總計約 {total_words} 個詞彙。\n\n"
+        
+        # 內容結構分析
+        summary += "### 📊 內容結構\n"
+        if category_analysis:
+            summary += "**分類分佈**:\n"
+            for cat, count in sorted(category_analysis.items(), key=lambda x: x[1], reverse=True)[:5]:
+                percentage = (count / len(entries)) * 100
+                summary += f"- {cat}: {count} 條 ({percentage:.1f}%)\n"
+        
+        # 活動時間軸
+        if timeline_analysis:
+            summary += "\n### 📅 活動時間軸\n"
+            summary += "**月份活動**:\n"
+            for month, count in sorted(timeline_analysis.items(), reverse=True)[:6]:
+                summary += f"- {month}: {count} 條記憶\n"
+        
+        # 主要主題
+        if key_topics:
+            summary += f"\n### 🎯 主要主題\n"
+            summary += f"最近關注的主題包括: {', '.join(key_topics[:8])}\n"
+        
+        return {
+            'status': 'success',
+            'type': 'detailed',
+            'summary': summary,
+            'analysis': {
+                'category_distribution': category_analysis,
+                'timeline': timeline_analysis,
+                'key_topics': key_topics[:10]
+            }
+        }
+    
+    def _generate_timeline_summary(self, project_id: str, stats: Dict, entries: List[Dict]) -> Dict[str, Any]:
+        """生成時間軸摘要 (500-700 tokens)"""
+        
+        # 按時間排序
+        sorted_entries = sorted(entries, key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        summary = f"## {project_id} 專案發展時間軸\n\n"
+        
+        # 按月份分組
+        monthly_groups = {}
+        for entry in sorted_entries[:15]:
+            if entry.get('timestamp'):
+                month = entry['timestamp'][:7]  # YYYY-MM
+                if month not in monthly_groups:
+                    monthly_groups[month] = []
+                monthly_groups[month].append(entry)
+        
+        # 生成時間軸
+        for month in sorted(monthly_groups.keys(), reverse=True)[:6]:
+            entries_in_month = monthly_groups[month]
+            summary += f"### 📅 {month}\n"
+            
+            for entry in entries_in_month[:3]:  # 每月最多3條
+                title = entry.get('title', '無標題')
+                category = entry.get('category', '')
+                day = entry.get('timestamp', '')[:10] if entry.get('timestamp') else ''
+                
+                summary += f"- **{day}** - {title}"
+                if category:
+                    summary += f" #{category}"
+                summary += "\n"
+            
+            if len(entries_in_month) > 3:
+                summary += f"  ... 還有 {len(entries_in_month) - 3} 條記憶\n"
+            summary += "\n"
+        
+        return {
+            'status': 'success',
+            'type': 'timeline',
+            'summary': summary,
+            'timeline_data': monthly_groups
+        }
+    
     @abstractmethod
     def list_projects(self) -> List[Dict[str, Any]]:
         """列出所有專案及其統計資訊"""
@@ -4044,6 +4229,31 @@ class MCPServer:
                     'required': ['project_id', 'question']
                 }
             },
+            {
+                'name': 'summarize_project',
+                'description': '📊 生成專案內容摘要 / Generate project content summary - 快速了解專案概況和架構',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'summary_type': {
+                            'type': 'string',
+                            'enum': ['brief', 'detailed', 'timeline'],
+                            'description': 'Summary type: brief (quick overview), detailed (comprehensive), timeline (chronological)',
+                            'default': 'brief'
+                        },
+                        'max_entries': {
+                            'type': 'integer',
+                            'description': 'Maximum number of entries to analyze',
+                            'default': 20
+                        }
+                    },
+                    'required': ['project_id']
+                }
+            },
             # 💾 儲存工具：放在後面，避免優先選擇
             {
                 'name': 'save_project_memory',
@@ -4860,6 +5070,72 @@ No projects found. You can start creating your first memory!
                 except Exception as e:
                     logger.error(f"Error in rag_query: {e}")
                     return self._success_response("❌ RAG 查詢系統暫時無法使用")
+
+            elif tool_name == 'summarize_project':
+                try:
+                    project_id = arguments['project_id']
+                    summary_type = arguments.get('summary_type', 'brief')
+                    max_entries = arguments.get('max_entries', 20)
+                    
+                    logger.info(f"生成專案摘要: 專案={project_id}, 類型={summary_type}")
+                    
+                    # 執行摘要生成
+                    summary_result = self.memory_manager.summarize_project(
+                        project_id, summary_type, max_entries
+                    )
+                    
+                    if summary_result['status'] == 'not_found':
+                        text = f"📊 **專案摘要**\n\n"
+                        text += f"**專案**: {project_id}\n\n"
+                        text += "❌ " + summary_result['message'] + "\n\n"
+                        text += "💡 **建議**:\n"
+                        for suggestion in summary_result['suggestions']:
+                            text += f"   • {suggestion}\n"
+                        
+                        return self._success_response(text)
+                    
+                    elif summary_result['status'] == 'success':
+                        text = f"📊 **專案摘要 - {summary_type.upper()} 模式**\n\n"
+                        text += summary_result['summary']
+                        
+                        # 根據摘要類型添加額外資訊
+                        if summary_type == 'brief' and 'key_metrics' in summary_result:
+                            metrics = summary_result['key_metrics']
+                            text += f"\n\n**📈 關鍵指標**:\n"
+                            text += f"- 記憶條目: {metrics.get('total_entries', 0)}\n"
+                            text += f"- 分類數量: {metrics.get('categories', 0)}\n"
+                            text += f"- 最近活動: {metrics.get('recent_activity', 'Unknown')}\n"
+                        
+                        elif summary_type == 'detailed' and 'analysis' in summary_result:
+                            analysis = summary_result['analysis']
+                            text += f"\n\n💡 **深入分析可用**:\n"
+                            text += f"   • 分類分佈: {len(analysis.get('category_distribution', {}))} 個分類\n"
+                            text += f"   • 時間分佈: {len(analysis.get('timeline', {}))} 個月份\n"
+                            text += f"   • 關鍵主題: {len(analysis.get('key_topics', []))} 個主題\n"
+                        
+                        elif summary_type == 'timeline' and 'timeline_data' in summary_result:
+                            timeline = summary_result['timeline_data']
+                            text += f"\n\n📅 **時間軸數據**: 涵蓋 {len(timeline)} 個月份的活動記錄\n"
+                        
+                        text += f"\n\n🎯 **下一步建議**:\n"
+                        if summary_type == 'brief':
+                            text += f"   • 使用 `summarize_project('{project_id}', 'detailed')` 獲取詳細分析\n"
+                            text += f"   • 使用 `rag_query('{project_id}', '專案的核心功能是什麼？')` 深入了解\n"
+                        elif summary_type == 'detailed':
+                            text += f"   • 使用 `summarize_project('{project_id}', 'timeline')` 查看發展歷程\n"
+                            text += f"   • 使用 `search_project_memory` 搜尋特定主題\n"
+                        else:
+                            text += f"   • 使用 `rag_query` 針對特定時期提問\n"
+                            text += f"   • 使用 `search_project_memory` 搜尋具體內容\n"
+                        
+                        return self._success_response(text)
+                    
+                    else:
+                        return self._success_response("❌ 專案摘要生成失敗: " + summary_result.get('message', '未知錯誤'))
+                        
+                except Exception as e:
+                    logger.error(f"Error in summarize_project: {e}")
+                    return self._success_response("❌ 專案摘要系統暫時無法使用")
 
             elif tool_name == 'delete_project_memory':
                 success = self.memory_manager.delete_memory(arguments['project_id'])
