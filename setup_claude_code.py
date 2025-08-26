@@ -14,7 +14,7 @@ from pathlib import Path
 def get_claude_config_path():
     """取得 Claude Code 配置檔案路徑"""
     if sys.platform == "darwin":  # macOS
-        return Path.home() / ".config/claude/claude_desktop_config.json"
+        return Path.home() / "Library/Application Support/Claude/claude_desktop_config.json"
     elif sys.platform.startswith("linux"):  # Linux
         return Path.home() / ".config/claude/claude_desktop_config.json"
     elif sys.platform == "win32":  # Windows

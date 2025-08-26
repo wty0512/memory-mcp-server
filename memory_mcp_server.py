@@ -2972,7 +2972,7 @@ class SQLiteBackend(MemoryBackend):
                        rank
                 FROM memory_fts 
                 JOIN memory_entries me ON memory_fts.rowid = me.id
-                WHERE memory_fts MATCH ? AND me.project_id = ?
+                WHERE memory_fts MATCH ? AND me.project = ?
                 ORDER BY rank
                 LIMIT ?
             """, (query, project_id, limit))
@@ -2991,7 +2991,7 @@ class SQLiteBackend(MemoryBackend):
             cursor = conn.execute("""
                 SELECT title, category, content, created_at
                 FROM memory_entries 
-                WHERE project_id = ? AND (
+                WHERE project = ? AND (
                     content LIKE ? OR 
                     title LIKE ? OR 
                     category LIKE ?
@@ -3660,7 +3660,7 @@ class SQLiteBackend(MemoryBackend):
     
     def _count_entries(self, conn, project_id: str) -> int:
         """計算專案的記憶條目數量"""
-        cursor = conn.execute("SELECT COUNT(*) FROM memory_entries WHERE project_id = ?", (project_id,))
+        cursor = conn.execute("SELECT COUNT(*) FROM memory_entries WHERE project = ?", (project_id,))
         return cursor.fetchone()[0]
     
     def _generate_summary(self, content: str, title: str = None) -> str:
