@@ -1459,6 +1459,300 @@ class MemoryBackend(ABC):
             logger.error(f"Error calculating similarity: {e}")
             return 0.0
     
+    def suggest_tags(self, project_id: str, content: str, title: str = '', 
+                    max_suggestions: int = 5, include_existing: bool = True) -> Dict[str, Any]:
+        """
+        智能標籤和分類建議
+        基於內容分析和專案現有標籤模式生成建議
+        """
+        try:
+            # 1. 分析內容特徵
+            content_features = self._analyze_content_features(content, title)
+            
+            # 2. 獲取專案現有標籤（如果啟用）
+            existing_tags = []
+            tag_patterns = {}
+            
+            if include_existing:
+                existing_analysis = self._analyze_existing_tags(project_id)
+                existing_tags = existing_analysis['tags']
+                tag_patterns = existing_analysis['patterns']
+            
+            # 3. 生成標籤建議
+            suggested_tags = self._generate_tag_suggestions(
+                content_features, existing_tags, tag_patterns, max_suggestions
+            )
+            
+            # 4. 計算建議信心分數
+            scored_suggestions = []
+            for tag_info in suggested_tags:
+                confidence = self._calculate_tag_confidence(
+                    tag_info, content_features, tag_patterns
+                )
+                scored_suggestions.append({
+                    'tag': tag_info['tag'],
+                    'category': tag_info['category'],
+                    'confidence': confidence,
+                    'reason': tag_info['reason']
+                })
+            
+            # 按信心分數排序
+            scored_suggestions.sort(key=lambda x: x['confidence'], reverse=True)
+            
+            return {
+                'status': 'success',
+                'content_length': len(content),
+                'analyzed_features': len(content_features),
+                'existing_tags_count': len(existing_tags),
+                'suggestions': scored_suggestions[:max_suggestions],
+                'content_analysis': {
+                    'detected_topics': content_features.get('topics', []),
+                    'tech_keywords': content_features.get('tech_keywords', []),
+                    'action_keywords': content_features.get('actions', [])
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating tag suggestions: {e}")
+            return {
+                'status': 'error',
+                'message': f'生成標籤建議時發生錯誤: {str(e)}',
+                'suggestions': []
+            }
+    
+    def _analyze_content_features(self, content: str, title: str = '') -> Dict[str, List[str]]:
+        """分析內容特徵，提取關鍵詞和主題"""
+        
+        all_text = f"{title} {content}".lower()
+        
+        # 技術關鍵詞字典
+        tech_keywords = {
+            # 程式語言
+            'python': ['python', 'py', 'django', 'flask', 'fastapi', 'pandas'],
+            'javascript': ['javascript', 'js', 'node', 'react', 'vue', 'angular'],
+            'java': ['java', 'spring', 'maven', 'gradle', 'jvm'],
+            'web': ['html', 'css', 'frontend', 'backend', 'api', 'rest'],
+            
+            # 開發活動
+            'development': ['開發', 'develop', '實作', 'implement', '建立', 'create'],
+            'testing': ['測試', 'test', '驗證', 'verify', 'unit test', 'integration'],
+            'deployment': ['部署', 'deploy', '發佈', 'release', 'ci/cd', 'docker'],
+            'debugging': ['debug', 'fix', '修復', '錯誤', 'error', 'bug'],
+            
+            # 系統概念
+            'database': ['資料庫', 'database', 'sql', 'mysql', 'postgresql', 'mongodb'],
+            'security': ['安全', 'security', 'auth', '認證', 'encryption'],
+            'performance': ['效能', 'performance', '優化', 'optimization', 'speed'],
+            'architecture': ['架構', 'architecture', '設計', 'design', 'pattern'],
+            
+            # 專案管理
+            'planning': ['計劃', 'plan', '需求', 'requirement', '規格', 'spec'],
+            'documentation': ['文檔', 'document', '說明', 'readme', '指南', 'guide'],
+            'meeting': ['會議', 'meeting', '討論', 'discussion', '決定', 'decision'],
+            'review': ['審查', 'review', '檢查', 'check', '評估', 'evaluation'],
+        }
+        
+        # 動作關鍵詞
+        action_keywords = {
+            'create': ['建立', 'create', '創建', '新增', 'add'],
+            'update': ['更新', 'update', '修改', 'modify', '改進', 'improve'],
+            'delete': ['刪除', 'delete', '移除', 'remove', '清理', 'cleanup'],
+            'analyze': ['分析', 'analyze', '研究', 'research', '調查', 'investigate'],
+            'solve': ['解決', 'solve', '修復', 'fix', '處理', 'handle'],
+        }
+        
+        # 檢測技術關鍵詞
+        detected_tech = []
+        for category, keywords in tech_keywords.items():
+            if any(keyword in all_text for keyword in keywords):
+                detected_tech.append(category)
+        
+        # 檢測動作關鍵詞
+        detected_actions = []
+        for action, keywords in action_keywords.items():
+            if any(keyword in all_text for keyword in keywords):
+                detected_actions.append(action)
+        
+        # 提取主題（基於頻繁出現的名詞）
+        import re
+        words = re.findall(r'\b[a-zA-Z\u4e00-\u9fff]{3,}\b', all_text)
+        word_freq = {}
+        for word in words:
+            if len(word) >= 3:  # 過濾短詞
+                word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # 取出現頻率高的詞作為主題
+        topics = [word for word, freq in sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10] if freq > 1]
+        
+        return {
+            'tech_keywords': detected_tech,
+            'actions': detected_actions,
+            'topics': topics[:5],  # 限制主題數量
+            'content_length': len(content),
+            'has_title': bool(title.strip())
+        }
+    
+    def _analyze_existing_tags(self, project_id: str) -> Dict[str, Any]:
+        """分析專案現有標籤模式"""
+        try:
+            # 獲取專案統計資訊
+            stats = self.get_memory_stats(project_id) if hasattr(self, 'get_memory_stats') else {}
+            existing_categories = stats.get('categories', [])
+            
+            # 分析標籤模式
+            tag_patterns = {}
+            for category in existing_categories:
+                # 簡單分析：按標籤長度和內容分類
+                if len(category) <= 8:
+                    tag_patterns[category] = 'short'  # 短標籤
+                elif any(keyword in category.lower() for keyword in ['開發', 'dev', 'test', '測試']):
+                    tag_patterns[category] = 'development'  # 開發相關
+                elif any(keyword in category.lower() for keyword in ['文檔', 'doc', '說明', 'guide']):
+                    tag_patterns[category] = 'documentation'  # 文檔相關
+                else:
+                    tag_patterns[category] = 'general'  # 一般標籤
+            
+            return {
+                'tags': existing_categories,
+                'patterns': tag_patterns,
+                'total_categories': len(existing_categories)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing existing tags: {e}")
+            return {'tags': [], 'patterns': {}, 'total_categories': 0}
+    
+    def _generate_tag_suggestions(self, content_features: Dict, existing_tags: List[str], 
+                                 tag_patterns: Dict, max_suggestions: int) -> List[Dict]:
+        """根據內容特徵和現有模式生成標籤建議"""
+        
+        suggestions = []
+        
+        # 基於技術關鍵詞的建議
+        tech_mapping = {
+            'python': '開發',
+            'javascript': '前端',
+            'java': '後端',
+            'web': '網頁',
+            'development': '開發',
+            'testing': '測試',
+            'deployment': '部署',
+            'debugging': '修復',
+            'database': '資料庫',
+            'security': '安全',
+            'performance': '效能',
+            'architecture': '架構',
+            'planning': '計劃',
+            'documentation': '文檔',
+            'meeting': '會議',
+            'review': '審查',
+        }
+        
+        for tech in content_features.get('tech_keywords', []):
+            if tech in tech_mapping:
+                tag = tech_mapping[tech]
+                if tag not in existing_tags:  # 避免重複
+                    suggestions.append({
+                        'tag': tag,
+                        'category': 'technical',
+                        'reason': f'檢測到 {tech} 相關內容'
+                    })
+        
+        # 基於動作關鍵詞的建議
+        action_mapping = {
+            'create': '新增',
+            'update': '更新', 
+            'delete': '刪除',
+            'analyze': '分析',
+            'solve': '解決',
+        }
+        
+        for action in content_features.get('actions', []):
+            if action in action_mapping:
+                tag = action_mapping[action]
+                if tag not in existing_tags:
+                    suggestions.append({
+                        'tag': tag,
+                        'category': 'action',
+                        'reason': f'檢測到 {action} 相關活動'
+                    })
+        
+        # 基於現有標籤模式的建議
+        if existing_tags:
+            # 如果專案有開發相關標籤，建議相關標籤
+            dev_tags = [tag for tag, pattern in tag_patterns.items() if pattern == 'development']
+            if dev_tags and '實作' not in existing_tags:
+                suggestions.append({
+                    'tag': '實作',
+                    'category': 'development',
+                    'reason': '基於專案開發活動模式'
+                })
+        
+        # 基於內容長度的建議
+        content_length = content_features.get('content_length', 0)
+        if content_length > 500 and '詳細' not in existing_tags:
+            suggestions.append({
+                'tag': '詳細',
+                'category': 'attribute',
+                'reason': '內容較長，包含詳細資訊'
+            })
+        elif content_length < 100 and '簡要' not in existing_tags:
+            suggestions.append({
+                'tag': '簡要',
+                'category': 'attribute', 
+                'reason': '內容簡短扼要'
+            })
+        
+        # 基於主題的建議
+        topics = content_features.get('topics', [])
+        for topic in topics[:2]:  # 只取前兩個主題
+            if len(topic) <= 8 and topic not in existing_tags:
+                suggestions.append({
+                    'tag': topic,
+                    'category': 'topic',
+                    'reason': f'內容主題: {topic}'
+                })
+        
+        return suggestions[:max_suggestions * 2]  # 生成更多選項以供篩選
+    
+    def _calculate_tag_confidence(self, tag_info: Dict, content_features: Dict, 
+                                 tag_patterns: Dict) -> float:
+        """計算標籤建議的信心分數 (0.0-1.0)"""
+        
+        confidence = 0.5  # 基礎信心分數
+        
+        # 基於類別的信心調整
+        category = tag_info.get('category', 'general')
+        if category == 'technical':
+            confidence += 0.3  # 技術標籤較可靠
+        elif category == 'action':
+            confidence += 0.2  # 動作標籤較可靠
+        elif category == 'topic':
+            confidence += 0.1  # 主題標籤
+        
+        # 基於內容特徵的調整
+        tech_keywords = content_features.get('tech_keywords', [])
+        if len(tech_keywords) > 0:
+            confidence += min(0.2, len(tech_keywords) * 0.05)
+        
+        # 基於現有模式的調整
+        if tag_patterns:
+            similar_pattern_exists = any(
+                pattern in ['development', 'technical'] 
+                for pattern in tag_patterns.values()
+            )
+            if similar_pattern_exists and category in ['technical', 'development']:
+                confidence += 0.1
+        
+        # 標籤長度調整（簡短標籤通常更好）
+        tag_length = len(tag_info.get('tag', ''))
+        if tag_length <= 4:
+            confidence += 0.1
+        elif tag_length > 8:
+            confidence -= 0.1
+        
+        return min(1.0, max(0.0, confidence))
+    
     @abstractmethod
     def list_projects(self) -> List[Dict[str, Any]]:
         """列出所有專案及其統計資訊"""
@@ -4482,6 +4776,40 @@ class MCPServer:
                     'required': ['project_id', 'query']
                 }
             },
+            {
+                'name': 'suggest_tags',
+                'description': '🏷️ 智能標籤和分類建議 / Smart tag and category suggestions - 自動分析內容建議合適的標籤',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'content': {
+                            'type': 'string',
+                            'description': 'Content to analyze for tag suggestions'
+                        },
+                        'title': {
+                            'type': 'string',
+                            'description': 'Optional title for additional context'
+                        },
+                        'max_suggestions': {
+                            'type': 'integer',
+                            'description': 'Maximum number of tag suggestions',
+                            'default': 5,
+                            'minimum': 1,
+                            'maximum': 10
+                        },
+                        'include_existing': {
+                            'type': 'boolean',
+                            'description': 'Include analysis of existing project tags',
+                            'default': True
+                        }
+                    },
+                    'required': ['project_id', 'content']
+                }
+            },
             # 💾 儲存工具：放在後面，避免優先選擇
             {
                 'name': 'save_project_memory',
@@ -5457,6 +5785,107 @@ No projects found. You can start creating your first memory!
                 except Exception as e:
                     logger.error(f"Error in semantic_search: {e}")
                     return self._success_response("❌ 語義搜尋系統暫時無法使用")
+
+            elif tool_name == 'suggest_tags':
+                try:
+                    project_id = arguments['project_id']
+                    content = arguments['content']
+                    title = arguments.get('title', '')
+                    max_suggestions = arguments.get('max_suggestions', 5)
+                    include_existing = arguments.get('include_existing', True)
+                    
+                    logger.info(f"標籤建議: 專案={project_id}, 內容長度={len(content)}")
+                    
+                    # 執行標籤建議
+                    tag_result = self.memory_manager.suggest_tags(
+                        project_id, content, title, max_suggestions, include_existing
+                    )
+                    
+                    if tag_result['status'] == 'error':
+                        return self._success_response("❌ " + tag_result['message'])
+                    
+                    elif tag_result['status'] == 'success':
+                        text = f"🏷️ **智能標籤建議**\n\n"
+                        text += f"**專案**: {project_id}\n"
+                        text += f"**內容長度**: {tag_result['content_length']} 字符\n"
+                        
+                        if title:
+                            text += f"**標題**: {title}\n"
+                        
+                        if include_existing:
+                            text += f"**現有標籤**: {tag_result['existing_tags_count']} 個\n"
+                        
+                        # 內容分析結果
+                        analysis = tag_result.get('content_analysis', {})
+                        if analysis:
+                            text += f"\n📊 **內容分析**:\n"
+                            
+                            tech_keywords = analysis.get('tech_keywords', [])
+                            if tech_keywords:
+                                text += f"   • 技術關鍵詞: {', '.join(tech_keywords)}\n"
+                            
+                            action_keywords = analysis.get('action_keywords', [])
+                            if action_keywords:
+                                text += f"   • 動作關鍵詞: {', '.join(action_keywords)}\n"
+                            
+                            topics = analysis.get('detected_topics', [])
+                            if topics:
+                                text += f"   • 主題詞彙: {', '.join(topics[:3])}\n"
+                        
+                        # 標籤建議
+                        suggestions = tag_result.get('suggestions', [])
+                        if not suggestions:
+                            text += "\n❌ **沒有標籤建議**\n\n"
+                            text += "💡 **原因可能**:\n"
+                            text += "   • 內容不包含明顯的技術或主題關鍵詞\n"
+                            text += "   • 所有相關標籤已在專案中使用\n"
+                            text += "   • 內容太簡短無法分析\n\n"
+                            text += "🎯 **建議**:\n"
+                            text += "   • 提供更詳細的內容描述\n"
+                            text += "   • 手動指定合適的標籤\n"
+                            text += "   • 參考現有專案標籤模式\n"
+                        else:
+                            text += f"\n✅ **推薦標籤** (按信心度排序):\n\n"
+                            
+                            for i, suggestion in enumerate(suggestions, 1):
+                                confidence = suggestion.get('confidence', 0)
+                                tag = suggestion.get('tag', '')
+                                category = suggestion.get('category', '')
+                                reason = suggestion.get('reason', '')
+                                
+                                # 信心度圖標
+                                if confidence >= 0.8:
+                                    conf_icon = "🟢"
+                                elif confidence >= 0.6:
+                                    conf_icon = "🟡"
+                                else:
+                                    conf_icon = "🟠"
+                                
+                                text += f"{conf_icon} **{i}.** `{tag}`"
+                                if category:
+                                    text += f" ({category})"
+                                text += f"\n   📊 信心度: {confidence:.2f}"
+                                if reason:
+                                    text += f" | {reason}"
+                                text += "\n\n"
+                        
+                        # 使用建議
+                        text += "🎯 **使用建議**:\n"
+                        if suggestions:
+                            best_suggestion = suggestions[0]['tag']
+                            text += f"   • 推薦使用: `{best_suggestion}` (最高信心度)\n"
+                            text += f"   • 使用 `save_project_memory(project_id, content, title, '{best_suggestion}')` 保存\n"
+                        text += "   • 可以組合多個標籤以更好地分類內容\n"
+                        text += "   • 建議保持標籤簡潔（4-8個字符）\n"
+                        
+                        return self._success_response(text)
+                    
+                    else:
+                        return self._success_response("❌ 標籤建議生成失敗")
+                        
+                except Exception as e:
+                    logger.error(f"Error in suggest_tags: {e}")
+                    return self._success_response("❌ 標籤建議系統暫時無法使用")
 
             elif tool_name == 'delete_project_memory':
                 success = self.memory_manager.delete_memory(arguments['project_id'])
