@@ -889,6 +889,97 @@ class MemoryBackend(ABC):
         """搜尋記憶內容"""
         pass
     
+    def rag_query(self, project_id: str, question: str, context_limit: int = 5, max_tokens: int = 2000) -> Dict[str, Any]:
+        """
+        RAG 查詢：基於專案記憶回答問題
+        檢索相關內容並構建用於回答的上下文
+        """
+        # 1. 檢索相關內容
+        relevant_docs = self.search_memory(project_id, question, context_limit * 2)
+        
+        if not relevant_docs:
+            return {
+                'status': 'no_context',
+                'answer': f'沒有找到與「{question}」相關的專案記憶內容。',
+                'context_sources': [],
+                'suggestions': [
+                    f"使用 save_project_memory 記錄與「{question}」相關的資訊",
+                    f"嘗試使用不同的關鍵字搜尋",
+                    f"檢查專案ID「{project_id}」是否正確"
+                ]
+            }
+        
+        # 2. 選擇最相關的內容並控制 token 數量
+        selected_docs = []
+        total_tokens = 0
+        
+        for doc in relevant_docs[:context_limit]:
+            content = doc.get('entry', doc.get('content', ''))
+            content_tokens = len(content) // 4  # 粗略估計 token 數
+            
+            if total_tokens + content_tokens <= max_tokens:
+                selected_docs.append({
+                    'title': doc.get('title', '無標題'),
+                    'category': doc.get('category', ''),
+                    'timestamp': doc.get('timestamp', doc.get('created_at', '')),
+                    'content': content,
+                    'relevance': doc.get('similarity', doc.get('relevance', 0))
+                })
+                total_tokens += content_tokens
+            else:
+                break
+        
+        # 3. 構建結構化上下文
+        context_parts = []
+        for i, doc in enumerate(selected_docs, 1):
+            context_part = f"【記憶 {i}】"
+            if doc['title']:
+                context_part += f" {doc['title']}"
+            if doc['category']:
+                context_part += f" #{doc['category']}"
+            if doc['timestamp']:
+                context_part += f" ({doc['timestamp'][:16]})"
+            context_part += f"\n{doc['content']}\n"
+            context_parts.append(context_part)
+        
+        context_text = "\n---\n\n".join(context_parts)
+        
+        # 4. 構建 RAG 提示詞
+        rag_prompt = f"""基於以下專案記憶內容回答問題：
+
+專案：{project_id}
+問題：{question}
+
+相關記憶內容：
+{context_text}
+
+---
+
+請基於上述記憶內容提供準確的回答：
+1. 如果記憶中有直接相關的資訊，請詳細回答
+2. 如果只有部分相關資訊，請說明已知的部分並指出缺少什麼
+3. 如果記憶內容不足以回答問題，請明確說明並建議下一步行動
+
+請用專業但易懂的方式回答。"""
+
+        return {
+            'status': 'success',
+            'prompt': rag_prompt,
+            'context_sources': [
+                {
+                    'title': doc['title'],
+                    'category': doc['category'],
+                    'timestamp': doc['timestamp'],
+                    'relevance': doc.get('relevance', 0),
+                    'content_preview': doc['content'][:200] + ('...' if len(doc['content']) > 200 else '')
+                }
+                for doc in selected_docs
+            ],
+            'context_count': len(selected_docs),
+            'estimated_tokens': total_tokens,
+            'question': question
+        }
+    
     @abstractmethod
     def list_projects(self) -> List[Dict[str, Any]]:
         """列出所有專案及其統計資訊"""
@@ -3823,7 +3914,36 @@ class MCPServer:
                     'required': ['project_id']
                 }
             },
-            # 💾 儲存工具：放在後面，避免Claude優先選擇
+            # 🤖 智能查詢工具：RAG 問答系統
+            {
+                'name': 'rag_query',
+                'description': '🧠 基於專案記憶的智能問答 / RAG-based intelligent Q&A - 回答複雜專案問題',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'question': {
+                            'type': 'string',
+                            'description': 'Question to answer based on project memory'
+                        },
+                        'context_limit': {
+                            'type': 'integer',
+                            'description': 'Maximum number of relevant contexts to include',
+                            'default': 5
+                        },
+                        'max_tokens': {
+                            'type': 'integer',
+                            'description': 'Maximum tokens for context (controls response length)',
+                            'default': 2000
+                        }
+                    },
+                    'required': ['project_id', 'question']
+                }
+            },
+            # 💾 儲存工具：放在後面，避免優先選擇
             {
                 'name': 'save_project_memory',
                 'description': '💾 儲存資訊到專案記憶 / Save information to project memory - 保存重要發現和決定',
@@ -4459,7 +4579,8 @@ No projects found. You can start creating your first memory!
                             text += f"   推薦專案：{', '.join([f'`{p}`' for p in recent_projects[:3]])}\n\n"
                         
                         text += "🎯 **快速開始**：\n"
-                        text += "   • `search_project_memory(project_id, \"概況\")` - 了解專案概況\n"
+                        text += "   • `rag_query(project_id, \"這個專案是什麼？\")` - 🧠 智能問答\n"
+                        text += "   • `search_project_memory(project_id, \"概況\")` - 搜尋特定內容\n"
                         text += "   • `get_recent_project_memory(project_id)` - 查看最新進展\n"
                         text += "   • `get_project_memory_stats(project_id)` - 專案統計資訊\n"
                         
@@ -4510,6 +4631,66 @@ No projects found. You can start creating your first memory!
                     text = f"No memory found for project: {arguments['project_id']}"
                 
                 return self._success_response(text)
+
+            elif tool_name == 'rag_query':
+                try:
+                    project_id = arguments['project_id']
+                    question = arguments['question']
+                    context_limit = arguments.get('context_limit', 5)
+                    max_tokens = arguments.get('max_tokens', 2000)
+                    
+                    logger.info(f"RAG查詢: 專案={project_id}, 問題={question[:50]}...")
+                    
+                    # 執行 RAG 查詢
+                    rag_result = self.memory_manager.rag_query(
+                        project_id, question, context_limit, max_tokens
+                    )
+                    
+                    if rag_result['status'] == 'no_context':
+                        # 沒有找到相關內容
+                        text = f"🤔 **無法回答問題**\n\n"
+                        text += f"**問題**: {question}\n"
+                        text += f"**專案**: {project_id}\n\n"
+                        text += "❌ 沒有找到相關的專案記憶內容。\n\n"
+                        text += "💡 **建議**:\n"
+                        for suggestion in rag_result['suggestions']:
+                            text += f"   • {suggestion}\n"
+                        
+                        return self._success_response(text)
+                    
+                    elif rag_result['status'] == 'success':
+                        # 成功找到相關內容，構建回答
+                        text = f"🧠 **RAG 智能問答**\n\n"
+                        text += f"**問題**: {question}\n"
+                        text += f"**專案**: {project_id}\n"
+                        text += f"**使用記憶**: {rag_result['context_count']} 條 (~{rag_result['estimated_tokens']} tokens)\n\n"
+                        
+                        text += "---\n\n"
+                        text += "**📝 給你的回答提示**:\n\n"
+                        text += rag_result['prompt']
+                        text += "\n\n---\n\n"
+                        
+                        text += "**📚 參考資料來源**:\n"
+                        for i, source in enumerate(rag_result['context_sources'], 1):
+                            text += f"\n**來源 {i}**: "
+                            if source['title']:
+                                text += f"{source['title']}"
+                            if source['category']:
+                                text += f" #{source['category']}"
+                            if source['timestamp']:
+                                text += f" ({source['timestamp'][:16]})"
+                            text += f"\n`{source['content_preview']}`\n"
+                        
+                        text += f"\n💡 使用此資訊來回答用戶的問題「{question}」"
+                        
+                        return self._success_response(text)
+                    
+                    else:
+                        return self._success_response("❌ RAG 查詢處理時發生錯誤")
+                        
+                except Exception as e:
+                    logger.error(f"Error in rag_query: {e}")
+                    return self._success_response("❌ RAG 查詢系統暫時無法使用")
 
             elif tool_name == 'delete_project_memory':
                 success = self.memory_manager.delete_memory(arguments['project_id'])
