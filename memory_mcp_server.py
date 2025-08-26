@@ -1009,28 +1009,30 @@ class SQLiteBackend(MemoryBackend):
             return None
     
     def search_memory(self, project_id: str, query: str, limit: int = 10) -> List[Dict[str, str]]:
-        """使用新表搜尋記憶內容"""
-        logger.info(f"[SQLITE] Calling search_memory for project: {project_id}, query: {query}")
+        """智能搜尋：自動選擇最省token的策略"""
+        logger.info(f"[SQLITE] Smart search for project: {project_id}, query: {query}")
+        
         try:
-            # 使用最終表的 search_mem_entries 方法
-            results = self.search_mem_entries(project=project_id, query=query, limit=limit)
+            # 智能判斷查詢類型
+            query_type = self._analyze_query_type(query)
+            logger.info(f"[SQLITE] Query type detected: {query_type}")
             
-            # 轉換格式以符合原始 API
-            formatted_results = []
-            for result in results:
-                formatted_results.append({
-                    'title': result['title'] or '',
-                    'category': result['category'] or '',
-                    'content': result['entry'],
-                    'created_at': result['created_at']
-                })
-            
-            logger.info(f"Search found {len(formatted_results)} results for '{query}'")
-            return formatted_results
+            if query_type == 'simple_lookup':
+                # 簡單查找：使用search_index（超省token）
+                return self._simple_search(project_id, query, limit)
+                
+            elif query_type == 'complex_question':
+                # 複雜問題：使用RAG策略（智能省token）
+                return self._rag_search(project_id, query, limit)
+                
+            else:
+                # 默認：混合策略
+                return self._hybrid_search(project_id, query, limit)
                 
         except Exception as e:
-            logger.error(f"Error searching memory for {project_id}: {e}")
-            return []
+            logger.error(f"Error in smart search for {project_id}: {e}")
+            # 降級到原始搜索
+            return self._fallback_search(project_id, query, limit)
     
     def _fts_search(self, project_id: str, query: str, limit: int) -> List[Dict[str, str]]:
         """使用 FTS5 全文搜尋"""
@@ -1087,6 +1089,191 @@ class SQLiteBackend(MemoryBackend):
             results.sort(key=lambda x: x['relevance'], reverse=True)
             return results
     
+    def _analyze_query_type(self, query: str) -> str:
+        """分析查詢類型，決定使用哪種策略"""
+        query_lower = query.lower()
+        
+        # 簡單查找關鍵詞
+        simple_keywords = [
+            '列表', 'list', '有哪些', '找到', 'find', '搜尋', 'search',
+            '顯示', 'show', '查看', 'view', '所有', 'all', '專案', 'project'
+        ]
+        if any(keyword in query_lower for keyword in simple_keywords):
+            return 'simple_lookup'
+        
+        # 複雜問題關鍵詞
+        complex_keywords = [
+            '為什麼', 'why', '如何', 'how', '解釋', 'explain', '分析', 'analyze',
+            '實現', 'implement', '原理', 'principle', '流程', 'process', '步驟', 'step'
+        ]
+        if any(keyword in query_lower for keyword in complex_keywords):
+            return 'complex_question'
+        
+        # 根據長度判斷
+        if len(query) > 50:
+            return 'complex_question'
+        elif len(query) < 15:
+            return 'simple_lookup'
+        
+        return 'hybrid'
+    
+    def _simple_search(self, project_id: str, query: str, limit: int) -> List[Dict[str, str]]:
+        """簡單搜索：使用search_index，超省token"""
+        logger.info(f"[SQLITE] Using simple search (token-efficient)")
+        
+        if hasattr(self, 'search_index'):
+            index_results = self.search_index(project_id, query, limit)
+            
+            # 轉換為標準格式
+            formatted_results = []
+            for result in index_results:
+                formatted_results.append({
+                    'timestamp': result.get('created_at', ''),
+                    'title': result.get('title', ''),
+                    'category': result.get('category', ''),
+                    'content': result.get('summary', result.get('entry', ''))[:300] + '...',  # 限制內容長度
+                    'relevance': result.get('match_type', 'index')
+                })
+            
+            logger.info(f"Simple search returned {len(formatted_results)} results (token-optimized)")
+            return formatted_results
+        else:
+            # 降級到基本搜索
+            return self._fallback_search(project_id, query, limit)
+    
+    def _rag_search(self, project_id: str, query: str, limit: int) -> List[Dict[str, str]]:
+        """RAG策略：智能選擇最相關內容，控制token使用"""
+        logger.info(f"[SQLITE] Using RAG search (intelligent token control)")
+        
+        try:
+            # 第一階段：輕量級篩選
+            if hasattr(self, 'search_index'):
+                candidates = self.search_index(project_id, query, limit * 3)
+            else:
+                candidates = self.search_mem_entries(project=project_id, query=query, limit=limit * 2)
+            
+            # 第二階段：智能選擇最相關的內容
+            selected_results = []
+            total_tokens = 0
+            max_tokens = 1500  # 控制總token數
+            
+            for candidate in candidates[:limit * 2]:  # 限制候選數量
+                if total_tokens >= max_tokens or len(selected_results) >= limit:
+                    break
+                
+                # 獲取內容
+                if 'entry' in candidate:
+                    content = candidate['entry']
+                else:
+                    # 如果是索引結果，獲取完整內容
+                    try:
+                        full_entry = self.get_memory_entry(candidate.get('id'))
+                        content = full_entry['entry'] if full_entry else candidate.get('summary', '')
+                    except:
+                        content = candidate.get('summary', '')
+                
+                # 智能截取相關內容
+                relevant_content = self._extract_relevant_content(content, query)
+                content_tokens = len(relevant_content) // 4  # 粗略估算token
+                
+                if total_tokens + content_tokens <= max_tokens:
+                    selected_results.append({
+                        'timestamp': candidate.get('created_at', ''),
+                        'title': candidate.get('title', ''),
+                        'category': candidate.get('category', ''),
+                        'content': relevant_content,
+                        'relevance': candidate.get('similarity', 0)
+                    })
+                    total_tokens += content_tokens
+            
+            logger.info(f"RAG search returned {len(selected_results)} results (~{total_tokens} tokens)")
+            return selected_results
+            
+        except Exception as e:
+            logger.error(f"Error in RAG search: {e}")
+            return self._fallback_search(project_id, query, limit)
+    
+    def _hybrid_search(self, project_id: str, query: str, limit: int) -> List[Dict[str, str]]:
+        """混合策略：結合索引和內容搜索"""
+        logger.info(f"[SQLITE] Using hybrid search")
+        
+        try:
+            # 先嘗試索引搜索
+            index_results = self._simple_search(project_id, query, limit // 2)
+            
+            # 再補充一些完整內容搜索
+            content_results = self._fallback_search(project_id, query, limit // 2)
+            
+            # 合併結果，去重
+            all_results = index_results + content_results
+            seen_titles = set()
+            unique_results = []
+            
+            for result in all_results:
+                title_key = f"{result['title']}_{result['timestamp']}"
+                if title_key not in seen_titles:
+                    seen_titles.add(title_key)
+                    unique_results.append(result)
+                    if len(unique_results) >= limit:
+                        break
+            
+            logger.info(f"Hybrid search returned {len(unique_results)} results")
+            return unique_results
+            
+        except Exception as e:
+            logger.error(f"Error in hybrid search: {e}")
+            return self._fallback_search(project_id, query, limit)
+    
+    def _extract_relevant_content(self, content: str, query: str) -> str:
+        """提取與問題最相關的內容片段"""
+        if not content:
+            return ""
+        
+        # 簡單實現：找包含問題關鍵詞的段落
+        query_keywords = [word.lower() for word in query.split() if len(word) > 2]
+        paragraphs = content.split('\n\n')
+        
+        relevant_paragraphs = []
+        for paragraph in paragraphs:
+            if any(keyword in paragraph.lower() for keyword in query_keywords):
+                relevant_paragraphs.append(paragraph)
+        
+        if relevant_paragraphs:
+            # 限制長度，保留最相關的部分
+            result = '\n\n'.join(relevant_paragraphs)
+            if len(result) > 800:  # 限制每個條目最大長度
+                result = result[:800] + '...'
+            return result
+        else:
+            # 如果沒有直接匹配，返回開頭部分
+            return content[:400] + '...' if len(content) > 400 else content
+    
+    def _fallback_search(self, project_id: str, query: str, limit: int) -> List[Dict[str, str]]:
+        """降級搜索：使用原始搜索方法"""
+        logger.info(f"[SQLITE] Using fallback search")
+        
+        try:
+            # 使用最終表的 search_mem_entries 方法
+            results = self.search_mem_entries(project=project_id, query=query, limit=limit)
+            
+            # 轉換格式以符合原始 API
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    'timestamp': result.get('created_at', ''),
+                    'title': result['title'] or '',
+                    'category': result['category'] or '',
+                    'content': result['entry'],
+                    'relevance': 'fallback'
+                })
+            
+            logger.info(f"Fallback search found {len(formatted_results)} results")
+            return formatted_results
+                
+        except Exception as e:
+            logger.error(f"Error in fallback search: {e}")
+            return []
+
     def _format_search_result(self, row, relevance: float) -> Dict[str, str]:
         """格式化搜尋結果"""
         # 格式化時間戳
@@ -2829,7 +3016,7 @@ class MCPServer:
             },
             {
                 'name': 'search_project_memory',
-                'description': '搜尋專案記憶內容 / Search project memory for specific content',
+                'description': '搜尋專案內容，回答任何專案相關問題 / Search project content to answer any project-related questions',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -2852,7 +3039,7 @@ class MCPServer:
             },
             {
                 'name': 'list_memory_projects',
-                'description': '列出所有記憶專案及統計資訊 / List all projects with memory and their statistics',
+                'description': '查看所有專案列表及統計資訊 / View all available projects and their statistics',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {},
