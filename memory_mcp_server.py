@@ -1266,6 +1266,199 @@ class MemoryBackend(ABC):
             'timeline_data': monthly_groups
         }
     
+    def semantic_search(self, project_id: str, query: str, expand_query: bool = True, 
+                       similarity_threshold: float = 0.3, limit: int = 10) -> Dict[str, Any]:
+        """
+        語義相關內容搜尋
+        通過關鍵詞擴展和相似度計算找到相關內容
+        """
+        try:
+            # 1. 查詢擴展
+            expanded_queries = []
+            if expand_query:
+                expanded_queries = self._expand_query_terms(query)
+            else:
+                expanded_queries = [query]
+            
+            # 2. 多查詢搜尋
+            all_results = []
+            seen_entries = set()  # 去重
+            
+            for expanded_query in expanded_queries:
+                search_results = self.search_memory(project_id, expanded_query, limit * 2)
+                
+                for result in search_results:
+                    # 使用時間戳 + 標題作為唯一識別
+                    entry_key = f"{result.get('timestamp', '')}_{result.get('title', '')}"
+                    if entry_key not in seen_entries:
+                        seen_entries.add(entry_key)
+                        
+                        # 計算相似度分數
+                        similarity = self._calculate_similarity(query, result)
+                        
+                        if similarity >= similarity_threshold:
+                            result['similarity_score'] = similarity
+                            result['matched_query'] = expanded_query
+                            all_results.append(result)
+            
+            # 3. 按相似度排序
+            sorted_results = sorted(all_results, key=lambda x: x.get('similarity_score', 0), reverse=True)
+            
+            # 4. 限制結果數量
+            final_results = sorted_results[:limit]
+            
+            return {
+                'status': 'success',
+                'original_query': query,
+                'expanded_queries': expanded_queries,
+                'total_found': len(all_results),
+                'returned': len(final_results),
+                'similarity_threshold': similarity_threshold,
+                'results': final_results
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in semantic search: {e}")
+            return {
+                'status': 'error',
+                'message': f'語義搜尋時發生錯誤: {str(e)}',
+                'results': []
+            }
+    
+    def _expand_query_terms(self, query: str) -> List[str]:
+        """
+        查詢詞擴展：生成相關搜尋詞
+        使用同義詞、相關詞和不同表達方式
+        """
+        queries = [query]  # 原始查詢
+        query_lower = query.lower()
+        
+        # 技術詞彙擴展字典
+        tech_expansions = {
+            # 程式語言
+            'python': ['py', 'python3', 'django', 'flask', 'fastapi'],
+            'javascript': ['js', 'node', 'nodejs', 'react', 'vue', 'angular'],
+            'java': ['jvm', 'spring', 'springboot', 'maven', 'gradle'],
+            'api': ['接口', '端點', 'endpoint', 'restful', 'graphql'],
+            
+            # 開發概念
+            '測試': ['test', 'testing', '單元測試', 'unit test', 'integration test'],
+            '部署': ['deploy', 'deployment', '發佈', 'release', 'ci/cd'],
+            '資料庫': ['database', 'db', 'mysql', 'postgresql', 'mongodb'],
+            '前端': ['frontend', 'ui', 'ux', 'interface', '界面'],
+            '後端': ['backend', 'server', 'service', '服務端', 'api'],
+            
+            # 架構概念
+            '架構': ['architecture', 'design', '設計', 'pattern', '模式'],
+            '性能': ['performance', '效能', 'optimization', '優化', 'speed'],
+            '安全': ['security', '安全性', 'auth', 'authentication', '認證'],
+            
+            # 中英文對照
+            '問題': ['problem', 'issue', 'bug', '錯誤', 'error'],
+            '解決': ['solution', 'solve', 'fix', '修復', 'resolve'],
+            '功能': ['feature', 'function', '特性', 'capability'],
+            '需求': ['requirement', 'spec', '規格', 'specification'],
+        }
+        
+        # 查找擴展詞
+        for key, expansions in tech_expansions.items():
+            if key in query_lower:
+                for expansion in expansions:
+                    if expansion not in query_lower:
+                        queries.append(expansion)
+            elif any(exp in query_lower for exp in expansions):
+                if key not in query_lower:
+                    queries.append(key)
+        
+        # 添加常見變體
+        variations = []
+        
+        # 單複數變化 (英文)
+        if query.endswith('s') and len(query) > 3:
+            variations.append(query[:-1])  # 去掉 s
+        elif not query.endswith('s') and query.isalpha():
+            variations.append(query + 's')  # 加上 s
+        
+        # 動詞形式變化
+        verb_forms = {
+            '實作': ['implement', 'implementation', '實現'],
+            '開發': ['develop', 'development', '建立'],
+            '建立': ['create', 'build', 'setup', '創建'],
+            '修復': ['fix', 'repair', 'solve', '解決'],
+            '測試': ['test', 'testing', '驗證'],
+        }
+        
+        for verb, forms in verb_forms.items():
+            if verb in query:
+                variations.extend(forms)
+            elif any(form in query_lower for form in forms):
+                variations.append(verb)
+        
+        queries.extend(variations)
+        
+        # 去重並限制數量
+        unique_queries = []
+        for q in queries:
+            if q not in unique_queries and len(q.strip()) > 0:
+                unique_queries.append(q)
+        
+        return unique_queries[:8]  # 最多8個查詢詞
+    
+    def _calculate_similarity(self, query: str, result: Dict) -> float:
+        """
+        計算查詢與結果的相似度分數 (0.0-1.0)
+        使用簡單的詞彙重疊和位置權重
+        """
+        try:
+            query_terms = set(query.lower().split())
+            
+            # 獲取結果中的文本內容
+            title = result.get('title', '')
+            content = result.get('content', result.get('entry', ''))
+            category = result.get('category', '')
+            
+            # 組合所有文本內容
+            all_text = f"{title} {content} {category}".lower()
+            content_terms = set(all_text.split())
+            
+            if not query_terms or not content_terms:
+                return 0.0
+            
+            # 計算詞彙重疊
+            intersection = query_terms.intersection(content_terms)
+            union = query_terms.union(content_terms)
+            
+            if not union:
+                return 0.0
+            
+            # 基礎相似度 (Jaccard 係數)
+            base_similarity = len(intersection) / len(union)
+            
+            # 標題匹配獎勵
+            title_bonus = 0.0
+            if title:
+                title_terms = set(title.lower().split())
+                title_intersection = query_terms.intersection(title_terms)
+                if title_intersection:
+                    title_bonus = len(title_intersection) / len(query_terms) * 0.3
+            
+            # 分類匹配獎勵
+            category_bonus = 0.0
+            if category and any(term in category.lower() for term in query_terms):
+                category_bonus = 0.1
+            
+            # 長度懲罰 (避免過長的內容稀釋相關性)
+            length_penalty = 0.0
+            if len(content) > 1000:
+                length_penalty = min(0.1, (len(content) - 1000) / 10000)
+            
+            final_similarity = min(1.0, base_similarity + title_bonus + category_bonus - length_penalty)
+            return max(0.0, final_similarity)
+            
+        except Exception as e:
+            logger.error(f"Error calculating similarity: {e}")
+            return 0.0
+    
     @abstractmethod
     def list_projects(self) -> List[Dict[str, Any]]:
         """列出所有專案及其統計資訊"""
@@ -4254,6 +4447,41 @@ class MCPServer:
                     'required': ['project_id']
                 }
             },
+            {
+                'name': 'semantic_search',
+                'description': '🔗 語義相關內容搜尋 / Semantic content search - 智能擴展查詢關鍵詞找到相關內容',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'query': {
+                            'type': 'string',
+                            'description': 'Original search query'
+                        },
+                        'expand_query': {
+                            'type': 'boolean',
+                            'description': 'Whether to expand query with related terms',
+                            'default': True
+                        },
+                        'similarity_threshold': {
+                            'type': 'number',
+                            'description': 'Minimum similarity score (0.0-1.0) for results',
+                            'default': 0.3,
+                            'minimum': 0.0,
+                            'maximum': 1.0
+                        },
+                        'limit': {
+                            'type': 'integer',
+                            'description': 'Maximum number of results to return',
+                            'default': 10
+                        }
+                    },
+                    'required': ['project_id', 'query']
+                }
+            },
             # 💾 儲存工具：放在後面，避免優先選擇
             {
                 'name': 'save_project_memory',
@@ -5136,6 +5364,99 @@ No projects found. You can start creating your first memory!
                 except Exception as e:
                     logger.error(f"Error in summarize_project: {e}")
                     return self._success_response("❌ 專案摘要系統暫時無法使用")
+
+            elif tool_name == 'semantic_search':
+                try:
+                    project_id = arguments['project_id']
+                    query = arguments['query']
+                    expand_query = arguments.get('expand_query', True)
+                    similarity_threshold = arguments.get('similarity_threshold', 0.3)
+                    limit = arguments.get('limit', 10)
+                    
+                    logger.info(f"語義搜尋: 專案={project_id}, 查詢='{query}', 擴展={expand_query}")
+                    
+                    # 執行語義搜尋
+                    semantic_result = self.memory_manager.semantic_search(
+                        project_id, query, expand_query, similarity_threshold, limit
+                    )
+                    
+                    if semantic_result['status'] == 'error':
+                        return self._success_response("❌ " + semantic_result['message'])
+                    
+                    elif semantic_result['status'] == 'success':
+                        text = f"🔗 **語義相關搜尋**\n\n"
+                        text += f"**專案**: {project_id}\n"
+                        text += f"**原始查詢**: {semantic_result['original_query']}\n"
+                        
+                        if expand_query and len(semantic_result['expanded_queries']) > 1:
+                            text += f"**擴展查詢**: {', '.join(semantic_result['expanded_queries'][:5])}"
+                            if len(semantic_result['expanded_queries']) > 5:
+                                text += f" (+{len(semantic_result['expanded_queries']) - 5} more)"
+                            text += "\n"
+                        
+                        text += f"**相似度閾值**: {similarity_threshold:.2f}\n"
+                        text += f"**找到結果**: {semantic_result['total_found']} 條，顯示 {semantic_result['returned']} 條\n\n"
+                        
+                        if semantic_result['returned'] == 0:
+                            text += "❌ 沒有找到符合相似度要求的內容\n\n"
+                            text += "💡 **建議**:\n"
+                            text += f"   • 降低相似度閾值 (目前: {similarity_threshold:.2f})\n"
+                            text += "   • 嘗試使用不同的關鍵字\n"
+                            text += "   • 使用 `search_project_memory` 進行基礎搜尋\n"
+                            text += "   • 使用 `rag_query` 進行智能問答\n"
+                        else:
+                            text += "✅ **相關內容** (按相似度排序):\n\n"
+                            
+                            for i, result in enumerate(semantic_result['results'], 1):
+                                similarity_score = result.get('similarity_score', 0)
+                                matched_query = result.get('matched_query', query)
+                                
+                                # 相似度圖標
+                                if similarity_score >= 0.7:
+                                    sim_icon = "🟢"
+                                elif similarity_score >= 0.5:
+                                    sim_icon = "🟡"
+                                else:
+                                    sim_icon = "🟠"
+                                
+                                text += f"{sim_icon} **{i}.** "
+                                
+                                if result.get('title'):
+                                    text += f"{result['title']}"
+                                if result.get('category'):
+                                    text += f" #{result['category']}"
+                                if result.get('timestamp'):
+                                    text += f" ({result['timestamp'][:16]})"
+                                
+                                text += f"\n📊 相似度: {similarity_score:.3f}"
+                                if matched_query != query:
+                                    text += f" | 匹配: `{matched_query}`"
+                                
+                                # 顯示內容摘要
+                                content = result.get('content', result.get('entry', ''))
+                                if content:
+                                    preview = content[:200] + ('...' if len(content) > 200 else '')
+                                    text += f"\n📝 {preview}\n\n"
+                        
+                        # 搜尋策略建議
+                        text += "\n🎯 **搜尋策略**:\n"
+                        if expand_query:
+                            text += f"   • 已使用 {len(semantic_result['expanded_queries'])} 個擴展查詢詞\n"
+                        if similarity_threshold > 0.5:
+                            text += "   • 使用高相似度閾值，結果更精確\n"
+                        elif similarity_threshold < 0.3:
+                            text += "   • 使用低相似度閾值，結果更廣泛\n"
+                        
+                        text += f"   • 使用 `rag_query('{project_id}', '{query}')` 獲得智能回答\n"
+                        
+                        return self._success_response(text)
+                    
+                    else:
+                        return self._success_response("❌ 語義搜尋處理失敗")
+                        
+                except Exception as e:
+                    logger.error(f"Error in semantic_search: {e}")
+                    return self._success_response("❌ 語義搜尋系統暫時無法使用")
 
             elif tool_name == 'delete_project_memory':
                 success = self.memory_manager.delete_memory(arguments['project_id'])
