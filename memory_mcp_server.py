@@ -1753,6 +1753,315 @@ class MemoryBackend(ABC):
         
         return min(1.0, max(0.0, confidence))
     
+    def analyze_content_relations(self, project_id: str, content: str, entry_id: int = None,
+                                relation_types: List[str] = None, similarity_threshold: float = 0.3,
+                                max_results: int = 10) -> Dict[str, Any]:
+        """分析內容關聯性，找到相關的記憶條目
+        
+        Args:
+            project_id: 專案ID
+            content: 要分析關聯的內容
+            entry_id: 可選，排除的條目ID
+            relation_types: 關聯類型 ['semantic', 'keyword', 'temporal', 'category']
+            similarity_threshold: 最小相似度閾值
+            max_results: 最大結果數
+            
+        Returns:
+            包含相關條目和關聯分析的字典
+        """
+        import re
+        import math
+        from collections import Counter, defaultdict
+        from datetime import datetime, timedelta
+        
+        if not relation_types:
+            relation_types = ['semantic', 'keyword', 'temporal', 'category']
+        
+        try:
+            # 取得所有專案記憶條目
+            all_entries = self.search_mem_entries(project_id, '', 1000)
+            if not all_entries:
+                return {
+                    'related_entries': [],
+                    'analysis': {
+                        'total_analyzed': 0,
+                        'relation_types_used': relation_types,
+                        'similarity_threshold': similarity_threshold
+                    }
+                }
+            
+            # 排除指定的條目ID
+            if entry_id:
+                all_entries = [entry for entry in all_entries if entry.get('id') != entry_id]
+            
+            # 分析目標內容特徵
+            target_features = self._analyze_relationship_features(content)
+            
+            # 計算關聯性分數
+            related_entries = []
+            for entry in all_entries:
+                entry_content = entry.get('entry', '')
+                entry_title = entry.get('title', '')
+                entry_category = entry.get('category', '')
+                entry_timestamp = entry.get('created_at', '')
+                
+                # 計算各種關聯性分數
+                relation_scores = {}
+                total_score = 0.0
+                
+                # 1. 語義關聯 (Semantic)
+                if 'semantic' in relation_types:
+                    entry_features = self._analyze_relationship_features(entry_content + ' ' + entry_title)
+                    semantic_score = self._calculate_semantic_similarity(target_features, entry_features)
+                    relation_scores['semantic'] = semantic_score
+                    total_score += semantic_score * 0.4  # 40% 權重
+                
+                # 2. 關鍵詞關聯 (Keyword)
+                if 'keyword' in relation_types:
+                    keyword_score = self._calculate_keyword_overlap(content, entry_content + ' ' + entry_title)
+                    relation_scores['keyword'] = keyword_score
+                    total_score += keyword_score * 0.3  # 30% 權重
+                
+                # 3. 時間關聯 (Temporal)
+                if 'temporal' in relation_types:
+                    temporal_score = self._calculate_temporal_proximity(entry_timestamp)
+                    relation_scores['temporal'] = temporal_score
+                    total_score += temporal_score * 0.15  # 15% 權重
+                
+                # 4. 分類關聯 (Category)
+                if 'category' in relation_types:
+                    category_score = self._calculate_category_similarity(target_features, entry_category)
+                    relation_scores['category'] = category_score
+                    total_score += category_score * 0.15  # 15% 權重
+                
+                # 只有總分超過閾值才納入結果
+                if total_score >= similarity_threshold:
+                    related_entries.append({
+                        'entry': entry,
+                        'similarity_score': round(total_score, 3),
+                        'relation_scores': {k: round(v, 3) for k, v in relation_scores.items()},
+                        'relationship_type': self._determine_primary_relationship(relation_scores)
+                    })
+            
+            # 按相似度排序並限制結果數
+            related_entries.sort(key=lambda x: x['similarity_score'], reverse=True)
+            related_entries = related_entries[:max_results]
+            
+            # 生成關聯分析報告
+            analysis = self._generate_relationship_analysis(related_entries, target_features, relation_types)
+            
+            return {
+                'related_entries': related_entries,
+                'analysis': analysis
+            }
+            
+        except Exception as e:
+            logger.error(f"Content relation analysis failed: {e}")
+            return {
+                'related_entries': [],
+                'analysis': {
+                    'error': str(e),
+                    'total_analyzed': 0
+                }
+            }
+    
+    def _analyze_relationship_features(self, content: str) -> Dict[str, Any]:
+        """分析內容特徵用於關聯性計算"""
+        import re
+        
+        # 基本文本分析
+        words = re.findall(r'\b\w+\b', content.lower())
+        
+        # 技術關鍵詞檢測
+        tech_keywords = []
+        tech_patterns = {
+            'languages': ['python', 'javascript', 'java', 'c++', 'go', 'rust', 'php', 'ruby'],
+            'frameworks': ['react', 'vue', 'angular', 'django', 'flask', 'express', 'spring'],
+            'tools': ['git', 'docker', 'kubernetes', 'jenkins', 'gitlab', 'github'],
+            'concepts': ['api', 'database', 'cache', 'auth', 'security', 'performance']
+        }
+        
+        for category, keywords in tech_patterns.items():
+            for keyword in keywords:
+                if keyword in content.lower():
+                    tech_keywords.append(keyword)
+        
+        # 提取重要名詞
+        important_words = [word for word in words if len(word) > 3 and word not in [
+            'this', 'that', 'with', 'from', 'they', 'were', 'been', 'have', 'their'
+        ]]
+        
+        # 計算詞頻
+        word_freq = Counter(words)
+        important_freq = Counter(important_words)
+        
+        return {
+            'words': words,
+            'important_words': important_words[:20],  # 前20個重要詞
+            'tech_keywords': tech_keywords,
+            'word_freq': word_freq,
+            'important_freq': important_freq,
+            'length': len(content),
+            'unique_words': len(set(words))
+        }
+    
+    def _calculate_semantic_similarity(self, features1: Dict, features2: Dict) -> float:
+        """計算語義相似度（使用Jaccard相似度和詞頻相似度）"""
+        words1 = set(features1.get('important_words', []))
+        words2 = set(features2.get('important_words', []))
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        # Jaccard 相似度
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        jaccard = intersection / union if union > 0 else 0
+        
+        # 技術關鍵詞相似度
+        tech1 = set(features1.get('tech_keywords', []))
+        tech2 = set(features2.get('tech_keywords', []))
+        tech_intersection = len(tech1.intersection(tech2))
+        tech_union = len(tech1.union(tech2))
+        tech_similarity = tech_intersection / tech_union if tech_union > 0 else 0
+        
+        # 組合相似度 (70% 詞彙相似度 + 30% 技術關鍵詞相似度)
+        return jaccard * 0.7 + tech_similarity * 0.3
+    
+    def _calculate_keyword_overlap(self, content1: str, content2: str) -> float:
+        """計算關鍵詞重疊度"""
+        import re
+        
+        words1 = set(re.findall(r'\b\w{3,}\b', content1.lower()))
+        words2 = set(re.findall(r'\b\w{3,}\b', content2.lower()))
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = len(words1.intersection(words2))
+        min_size = min(len(words1), len(words2))
+        
+        return intersection / min_size if min_size > 0 else 0
+    
+    def _calculate_temporal_proximity(self, timestamp: str) -> float:
+        """計算時間相近性（最近的內容相關性更高）"""
+        from datetime import datetime
+        
+        try:
+            if not timestamp:
+                return 0.0
+                
+            entry_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            current_time = datetime.now(entry_time.tzinfo)
+            time_diff = (current_time - entry_time).total_seconds()
+            
+            # 時間衰減函數：7天內最高分，之後逐漸衰減
+            days_diff = time_diff / (24 * 3600)
+            if days_diff <= 7:
+                return 1.0 - (days_diff / 7) * 0.3  # 7天內從1.0衰減到0.7
+            elif days_diff <= 30:
+                return 0.7 - ((days_diff - 7) / 23) * 0.4  # 30天內從0.7衰減到0.3
+            else:
+                return max(0.1, 0.3 - (days_diff - 30) / 365 * 0.2)  # 長期緩慢衰減
+                
+        except (ValueError, TypeError):
+            return 0.0
+    
+    def _calculate_category_similarity(self, target_features: Dict, entry_category: str) -> float:
+        """計算分類相似度"""
+        if not entry_category:
+            return 0.0
+        
+        # 基於技術關鍵詞判斷分類匹配度
+        tech_keywords = target_features.get('tech_keywords', [])
+        category_lower = entry_category.lower()
+        
+        # 計算分類相關性
+        score = 0.0
+        
+        # 技術分類匹配
+        if any(tech in category_lower for tech in tech_keywords):
+            score += 0.8
+        
+        # 通用分類匹配模式
+        category_patterns = {
+            'development': ['dev', 'code', 'programming', 'software'],
+            'documentation': ['doc', 'guide', 'manual', 'readme'],
+            'bug': ['fix', 'error', 'issue', 'problem'],
+            'feature': ['new', 'add', 'implement', 'create'],
+            'performance': ['optimize', 'speed', 'performance', 'efficiency']
+        }
+        
+        important_words = set(target_features.get('important_words', []))
+        for category_type, patterns in category_patterns.items():
+            if category_type in category_lower or any(pattern in category_lower for pattern in patterns):
+                if any(pattern in ' '.join(important_words).lower() for pattern in patterns):
+                    score += 0.6
+                else:
+                    score += 0.3
+                break
+        
+        return min(1.0, score)
+    
+    def _determine_primary_relationship(self, relation_scores: Dict[str, float]) -> str:
+        """確定主要關聯類型"""
+        if not relation_scores:
+            return 'unknown'
+        
+        max_score_type = max(relation_scores.items(), key=lambda x: x[1])
+        return max_score_type[0]
+    
+    def _generate_relationship_analysis(self, related_entries: List[Dict], 
+                                      target_features: Dict, relation_types: List[str]) -> Dict[str, Any]:
+        """生成關聯分析報告"""
+        total_found = len(related_entries)
+        
+        if total_found == 0:
+            return {
+                'total_analyzed': 0,
+                'total_found': 0,
+                'relation_types_used': relation_types,
+                'insights': ["未找到相關內容。嘗試降低相似度閾值或使用更廣泛的搜索詞。"]
+            }
+        
+        # 分析關聯類型分佈
+        relation_distribution = {}
+        for entry_data in related_entries:
+            rel_type = entry_data.get('relationship_type', 'unknown')
+            relation_distribution[rel_type] = relation_distribution.get(rel_type, 0) + 1
+        
+        # 計算平均相似度
+        avg_similarity = sum(entry['similarity_score'] for entry in related_entries) / total_found
+        
+        # 生成洞察
+        insights = []
+        
+        # 關聯類型洞察
+        dominant_relation = max(relation_distribution.items(), key=lambda x: x[1])[0] if relation_distribution else 'unknown'
+        insights.append(f"主要關聯類型：{dominant_relation}（{relation_distribution.get(dominant_relation, 0)} 個條目）")
+        
+        # 相似度洞察
+        if avg_similarity > 0.7:
+            insights.append(f"發現高度相關內容，平均相似度：{avg_similarity:.2f}")
+        elif avg_similarity > 0.4:
+            insights.append(f"發現中等相關內容，平均相似度：{avg_similarity:.2f}")
+        else:
+            insights.append(f"發現弱相關內容，平均相似度：{avg_similarity:.2f}")
+        
+        # 技術關鍵詞洞察
+        tech_keywords = target_features.get('tech_keywords', [])
+        if tech_keywords:
+            insights.append(f"檢測到技術關鍵詞：{', '.join(tech_keywords[:5])}")
+        
+        return {
+            'total_analyzed': len(related_entries),
+            'total_found': total_found,
+            'avg_similarity': round(avg_similarity, 3),
+            'relation_distribution': relation_distribution,
+            'relation_types_used': relation_types,
+            'insights': insights
+        }
+    
     @abstractmethod
     def list_projects(self) -> List[Dict[str, Any]]:
         """列出所有專案及其統計資訊"""
@@ -4810,6 +5119,48 @@ class MCPServer:
                     'required': ['project_id', 'content']
                 }
             },
+            {
+                'name': 'analyze_content_relations',
+                'description': '🔗 內容關聯分析 / Content relationship analysis - 尋找與特定內容相關的其他記憶條目',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'content': {
+                            'type': 'string',
+                            'description': 'Content to find relationships for'
+                        },
+                        'entry_id': {
+                            'type': 'integer',
+                            'description': 'Optional entry ID to exclude from results'
+                        },
+                        'relation_types': {
+                            'type': 'array',
+                            'items': {'type': 'string'},
+                            'description': 'Types of relationships to analyze',
+                            'default': ['semantic', 'keyword', 'temporal', 'category']
+                        },
+                        'similarity_threshold': {
+                            'type': 'number',
+                            'description': 'Minimum similarity score for relationships',
+                            'default': 0.3,
+                            'minimum': 0.1,
+                            'maximum': 1.0
+                        },
+                        'max_results': {
+                            'type': 'integer',
+                            'description': 'Maximum number of related entries to return',
+                            'default': 10,
+                            'minimum': 1,
+                            'maximum': 50
+                        }
+                    },
+                    'required': ['project_id', 'content']
+                }
+            },
             # 💾 儲存工具：放在後面，避免優先選擇
             {
                 'name': 'save_project_memory',
@@ -5886,6 +6237,135 @@ No projects found. You can start creating your first memory!
                 except Exception as e:
                     logger.error(f"Error in suggest_tags: {e}")
                     return self._success_response("❌ 標籤建議系統暫時無法使用")
+
+            elif tool_name == 'analyze_content_relations':
+                try:
+                    project_id = arguments['project_id']
+                    content = arguments['content']
+                    entry_id = arguments.get('entry_id')
+                    relation_types = arguments.get('relation_types', ['semantic', 'keyword', 'temporal', 'category'])
+                    similarity_threshold = arguments.get('similarity_threshold', 0.3)
+                    max_results = arguments.get('max_results', 10)
+                    
+                    logger.info(f"內容關聯分析: 專案={project_id}, 內容長度={len(content)}, 閾值={similarity_threshold}")
+                    
+                    # 執行內容關聯分析
+                    relation_result = self.memory_manager.analyze_content_relations(
+                        project_id, content, entry_id, relation_types, similarity_threshold, max_results
+                    )
+                    
+                    # 格式化結果
+                    related_entries = relation_result.get('related_entries', [])
+                    analysis = relation_result.get('analysis', {})
+                    
+                    text = f"🔗 **內容關聯分析結果**\n\n"
+                    text += f"**專案**: {project_id}\n"
+                    text += f"**查詢內容**: {content[:100]}{'...' if len(content) > 100 else ''}\n"
+                    text += f"**相似度閾值**: {similarity_threshold}\n"
+                    
+                    if entry_id:
+                        text += f"**排除條目**: ID {entry_id}\n"
+                    
+                    text += f"**分析方式**: {', '.join(relation_types)}\n\n"
+                    
+                    # 分析摘要
+                    if 'error' in analysis:
+                        text += f"❌ **分析錯誤**: {analysis['error']}\n"
+                        return self._success_response(text)
+                    
+                    total_found = analysis.get('total_found', 0)
+                    if total_found == 0:
+                        text += "📭 **未找到相關內容**\n\n"
+                        insights = analysis.get('insights', [])
+                        if insights:
+                            text += "💡 **建議**:\n"
+                            for insight in insights:
+                                text += f"   • {insight}\n"
+                        text += "\n🎯 **改善建議**:\n"
+                        text += "   • 降低相似度閾值（如 0.2 或 0.1）\n"
+                        text += "   • 使用更廣泛的搜尋關鍵詞\n"
+                        text += "   • 檢查專案中是否有相關內容\n"
+                        return self._success_response(text)
+                    
+                    text += f"📊 **分析結果概覽**:\n"
+                    text += f"   • 相關條目數量: {total_found}\n"
+                    text += f"   • 平均相似度: {analysis.get('avg_similarity', 0):.3f}\n"
+                    
+                    # 關聯類型分布
+                    relation_dist = analysis.get('relation_distribution', {})
+                    if relation_dist:
+                        text += f"   • 主要關聯類型: "
+                        dist_items = []
+                        for rel_type, count in relation_dist.items():
+                            dist_items.append(f"{rel_type}({count})")
+                        text += ", ".join(dist_items) + "\n"
+                    
+                    # 洞察
+                    insights = analysis.get('insights', [])
+                    if insights:
+                        text += f"\n🔍 **分析洞察**:\n"
+                        for insight in insights:
+                            text += f"   • {insight}\n"
+                    
+                    # 相關條目列表
+                    text += f"\n✨ **相關條目** (按相似度排序):\n\n"
+                    
+                    for i, related_item in enumerate(related_entries[:max_results], 1):
+                        entry = related_item['entry']
+                        similarity = related_item['similarity_score']
+                        relation_scores = related_item.get('relation_scores', {})
+                        primary_relationship = related_item.get('relationship_type', 'unknown')
+                        
+                        # 相似度圖標
+                        if similarity >= 0.7:
+                            sim_icon = "🔥"
+                        elif similarity >= 0.5:
+                            sim_icon = "⭐"
+                        elif similarity >= 0.3:
+                            sim_icon = "🔸"
+                        else:
+                            sim_icon = "🔹"
+                        
+                        text += f"**{i}. {sim_icon} {entry.get('title', '無標題')}** (相似度: {similarity:.3f})\n"
+                        
+                        # 條目基本信息
+                        if entry.get('category'):
+                            text += f"   📂 分類: {entry['category']}\n"
+                        
+                        text += f"   📅 時間: {entry.get('created_at', '未知')}\n"
+                        text += f"   🎯 主要關聯: {primary_relationship}\n"
+                        
+                        # 詳細關聯分數
+                        if relation_scores:
+                            text += f"   📈 關聯分數: "
+                            score_items = []
+                            for rel_type, score in relation_scores.items():
+                                if score > 0:
+                                    score_items.append(f"{rel_type}({score:.2f})")
+                            if score_items:
+                                text += ", ".join(score_items) + "\n"
+                        
+                        # 內容預覽
+                        content_preview = entry.get('entry', '')[:150]
+                        if len(entry.get('entry', '')) > 150:
+                            content_preview += "..."
+                        text += f"   📝 內容: {content_preview}\n"
+                        
+                        text += "\n"
+                    
+                    # 使用指導
+                    text += "💡 **使用提示**:\n"
+                    text += "   • 相似度 >0.7: 高度相關，可作為參考依據\n"
+                    text += "   • 相似度 0.3-0.7: 中度相關，可提供背景信息\n"
+                    text += "   • 相似度 <0.3: 弱相關，可能有間接聯繫\n"
+                    text += f"   • 調整 similarity_threshold 參數可改變結果範圍\n"
+                    text += f"   • 使用 relation_types 參數可選擇分析維度\n"
+                    
+                    return self._success_response(text)
+                    
+                except Exception as e:
+                    logger.error(f"Error in analyze_content_relations: {e}")
+                    return self._success_response("❌ 內容關聯分析系統暫時無法使用")
 
             elif tool_name == 'delete_project_memory':
                 success = self.memory_manager.delete_memory(arguments['project_id'])
