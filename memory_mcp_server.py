@@ -47,12 +47,109 @@ try:
 except ImportError:
     HAS_MSVCRT = False
 
-# 設定日誌
+# 結構化日誌系統
+class StructuredLogger:
+    """結構化日誌記錄器"""
+    
+    def __init__(self, name: str = __name__, config_manager=None):
+        self.logger = logging.getLogger(name)
+        self.config = config_manager
+        self._setup_logging()
+    
+    def _setup_logging(self):
+        """設定日誌配置"""
+        if self.config:
+            level_str = self.config.get('logging', 'level', 'INFO')
+            level = getattr(logging, level_str.upper(), logging.INFO)
+            format_str = self.config.get('logging', 'format', 
+                                       '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        else:
+            level = logging.INFO
+            format_str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        
+        # 如果已經有 handler 就不重複設定
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(format_str)
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(level)
+    
+    def _format_structured(self, message: str, context: dict = None, **kwargs) -> str:
+        """格式化結構化訊息"""
+        parts = [message]
+        
+        # 合併 context 和 kwargs
+        all_context = {}
+        if context:
+            all_context.update(context)
+        all_context.update(kwargs)
+        
+        if all_context:
+            context_str = " | ".join([f"{k}={v}" for k, v in all_context.items()])
+            parts.append(f"[{context_str}]")
+        
+        return " ".join(parts)
+    
+    def debug(self, message: str, context: dict = None, **kwargs):
+        """除錯級別日誌"""
+        formatted = self._format_structured(message, context, **kwargs)
+        self.logger.debug(formatted)
+    
+    def info(self, message: str, context: dict = None, **kwargs):
+        """資訊級別日誌"""
+        formatted = self._format_structured(message, context, **kwargs)
+        self.logger.info(formatted)
+    
+    def warning(self, message: str, context: dict = None, **kwargs):
+        """警告級別日誌"""
+        formatted = self._format_structured(message, context, **kwargs)
+        self.logger.warning(formatted)
+    
+    def error(self, message: str, context: dict = None, **kwargs):
+        """錯誤級別日誌"""
+        formatted = self._format_structured(message, context, **kwargs)
+        self.logger.error(formatted)
+    
+    def critical(self, message: str, context: dict = None, **kwargs):
+        """嚴重錯誤級別日誌"""
+        formatted = self._format_structured(message, context, **kwargs)
+        self.logger.critical(formatted)
+    
+    def operation(self, operation: str, status: str, context: dict = None, **kwargs):
+        """操作日誌"""
+        all_context = {'operation': operation, 'status': status}
+        if context:
+            all_context.update(context)
+        all_context.update(kwargs)
+        
+        if status.lower() in ['success', 'completed', 'ok']:
+            self.info(f"Operation {operation} completed", all_context)
+        elif status.lower() in ['error', 'failed', 'failure']:
+            self.error(f"Operation {operation} failed", all_context)
+        else:
+            self.info(f"Operation {operation} status: {status}", all_context)
+    
+    def performance(self, operation: str, duration: float, context: dict = None, **kwargs):
+        """效能日誌"""
+        all_context = {'operation': operation, 'duration_ms': round(duration * 1000, 2)}
+        if context:
+            all_context.update(context)
+        all_context.update(kwargs)
+        
+        if duration > 5.0:  # 超過5秒記為警告
+            self.warning(f"Slow operation: {operation}", all_context)
+        elif duration > 1.0:  # 超過1秒記為資訊
+            self.info(f"Performance: {operation}", all_context)
+        else:
+            self.debug(f"Performance: {operation}", all_context)
+
+# 設定全域日誌記錄器（等配置管理器初始化後會重新配置）
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = StructuredLogger(__name__)
 
 # 自定義異常類別
 class ValidationError(ValueError):
@@ -572,6 +669,52 @@ class ConfigManager:
 
 # 全域配置實例
 config = ConfigManager()
+
+# 重新配置日誌記錄器使用配置管理器
+logger = StructuredLogger(__name__, config)
+
+# 效能測量裝飾器
+def log_performance(operation_name: str = None):
+    """效能測量裝飾器"""
+    def decorator(func):
+        import functools
+        
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            op_name = operation_name or f"{func.__name__}"
+            start_time = time.time()
+            
+            try:
+                result = func(*args, **kwargs)
+                duration = time.time() - start_time
+                
+                # 記錄成功的操作
+                context = {
+                    'function': func.__name__,
+                    'args_count': len(args),
+                    'kwargs_count': len(kwargs)
+                }
+                logger.performance(op_name, duration, context, status='success')
+                
+                return result
+                
+            except Exception as e:
+                duration = time.time() - start_time
+                
+                # 記錄失敗的操作
+                context = {
+                    'function': func.__name__,
+                    'args_count': len(args),
+                    'kwargs_count': len(kwargs),
+                    'error_type': type(e).__name__,
+                    'error_message': str(e)
+                }
+                logger.performance(op_name, duration, context, status='error')
+                
+                raise
+        
+        return wrapper
+    return decorator
 
 class FileLock:
     """跨平台檔案鎖定工具類"""
@@ -1506,9 +1649,17 @@ class SQLiteBackend(MemoryBackend):
     
     
     
+    @log_performance("sqlite_save_memory")
     def save_memory(self, project_id: str, content: str, title: str = "", category: str = "") -> bool:
         """儲存記憶到新的簡潔表結構"""
-        logger.info(f"[SQLITE] Calling save_memory for project: {project_id}")
+        context = {
+            'project_id': project_id,
+            'content_length': len(content),
+            'has_title': bool(title),
+            'has_category': bool(category)
+        }
+        logger.info("Starting save memory operation", context)
+        
         try:
             # 輸入驗證
             project_id = InputValidator.validate_project_id(project_id)
@@ -1525,13 +1676,26 @@ class SQLiteBackend(MemoryBackend):
                 entry_type="note",
                 summary=None  # 讓 AI 自己理解內容，不預先生成摘要
             )
-            logger.info(f"[SQLITE] Successfully saved memory with ID: {entry_id}")
+            
+            logger.operation("save_memory", "success", {
+                'project_id': project_id,
+                'entry_id': entry_id,
+                'content_length': len(content)
+            })
             return True
+            
         except (ValidationError, SecurityError) as e:
-            logger.error(f"[SQLITE] Validation error in save_memory: {e}")
+            logger.operation("save_memory", "validation_error", {
+                'project_id': project_id,
+                'error': str(e)
+            })
             return False
         except Exception as e:
-            logger.error(f"[SQLITE] Error saving memory: {e}")
+            logger.operation("save_memory", "error", {
+                'project_id': project_id,
+                'error_type': type(e).__name__,
+                'error': str(e)
+            })
             return False
     
     def get_memory(self, project_id: str) -> Optional[str]:
@@ -1583,9 +1747,15 @@ class SQLiteBackend(MemoryBackend):
             logger.error(f"Unexpected error reading memory for {project_id}: {e}")
             return None
     
+    @log_performance("sqlite_search_memory")
     def search_memory(self, project_id: str, query: str, limit: int = 10) -> List[Dict[str, str]]:
         """智能搜尋：自動選擇最省token的策略"""
-        logger.info(f"[SQLITE] Smart search for project: {project_id}, query: {query}")
+        context = {
+            'project_id': project_id,
+            'query_length': len(query),
+            'limit': limit
+        }
+        logger.info("Starting smart search operation", context)
         
         try:
             # 輸入驗證
