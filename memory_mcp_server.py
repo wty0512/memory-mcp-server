@@ -178,6 +178,103 @@ class InputValidator:
         
         return False
 
+# SQL 安全工具
+class SQLSafetyUtils:
+    """SQL 安全工具類別"""
+    
+    # SQL 關鍵字黑名單
+    DANGEROUS_KEYWORDS = {
+        'drop', 'delete', 'truncate', 'alter', 'create', 'insert', 'update',
+        'exec', 'execute', 'sp_', 'xp_', 'union', 'select', 'from', 'where',
+        'having', 'group', 'order', 'limit', 'offset', 'join', 'inner', 'outer',
+        'left', 'right', 'full', 'cross', 'on', 'as', 'distinct', 'all', 'any',
+        'exists', 'in', 'like', 'between', 'is', 'null', 'not', 'and', 'or',
+        'case', 'when', 'then', 'else', 'end', 'cast', 'convert'
+    }
+    
+    @classmethod
+    def sanitize_sql_identifier(cls, identifier: str) -> str:
+        """清理 SQL 識別符（表名、欄位名等）"""
+        if not identifier:
+            raise ValidationError("SQL 識別符不能為空")
+        
+        # 只允許字母、數字、底線
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', identifier):
+            raise ValidationError(f"無效的 SQL 識別符: {identifier}")
+        
+        # 檢查長度
+        if len(identifier) > 64:
+            raise ValidationError("SQL 識別符長度不能超過 64 字元")
+        
+        # 檢查是否為 SQL 關鍵字
+        if identifier.lower() in cls.DANGEROUS_KEYWORDS:
+            raise ValidationError(f"'{identifier}' 是 SQL 保留字，不能作為識別符")
+        
+        return identifier
+    
+    @classmethod
+    def build_safe_where_clause(cls, conditions: Dict[str, Any]) -> Tuple[str, List[Any]]:
+        """安全地構建 WHERE 子句"""
+        if not conditions:
+            return "", []
+        
+        where_parts = []
+        params = []
+        
+        for column, value in conditions.items():
+            # 驗證欄位名稱
+            safe_column = cls.sanitize_sql_identifier(column)
+            where_parts.append(f"{safe_column} = ?")
+            params.append(value)
+        
+        where_clause = " AND ".join(where_parts)
+        return where_clause, params
+    
+    @classmethod
+    def build_safe_update_clause(cls, updates: Dict[str, Any]) -> Tuple[str, List[Any]]:
+        """安全地構建 UPDATE SET 子句"""
+        if not updates:
+            raise ValidationError("UPDATE 語句必須包含至少一個更新欄位")
+        
+        set_parts = []
+        params = []
+        
+        for column, value in updates.items():
+            # 驗證欄位名稱
+            safe_column = cls.sanitize_sql_identifier(column)
+            set_parts.append(f"{safe_column} = ?")
+            params.append(value)
+        
+        set_clause = ", ".join(set_parts)
+        return set_clause, params
+    
+    @classmethod
+    def validate_sql_query(cls, query: str) -> bool:
+        """驗證 SQL 查詢是否安全"""
+        if not query:
+            return False
+        
+        query_lower = query.lower().strip()
+        
+        # 檢查是否包含危險操作
+        dangerous_patterns = [
+            r';\s*(drop|delete|truncate|alter|create)\s',
+            r'union\s+select',
+            r'exec\s*\(',
+            r'execute\s*\(',
+            r'sp_\w+',
+            r'xp_\w+',
+            r'--',  # SQL 注釋
+            r'/\*.*\*/',  # 多行注釋
+        ]
+        
+        for pattern in dangerous_patterns:
+            if re.search(pattern, query_lower):
+                logger.warning(f"Detected dangerous SQL pattern: {pattern}")
+                return False
+        
+        return True
+
 class FileLock:
     """跨平台檔案鎖定工具類"""
     
@@ -1565,47 +1662,59 @@ class SQLiteBackend(MemoryBackend):
         logger.info(f"[SQLITE] Calling delete_memory_entry for project: {project_id}")
         try:
             with self.get_connection() as conn:
-                # 建立查詢條件
-                where_conditions = ["project = ?"]
-                params = [project_id]
+                # 建立安全的查詢條件
+                conditions = {"project": project_id}
                 
                 if entry_id is not None:
                     try:
-                        where_conditions.append("id = ?")
-                        params.append(int(entry_id))
-                    except ValueError:
+                        conditions["id"] = int(entry_id)
+                    except (ValueError, TypeError):
                         return {'success': False, 'message': 'Invalid entry_id format'}
                 
+                # 使用 LIKE 查詢的條件需要特殊處理
+                like_conditions = []
+                like_params = []
+                
                 if timestamp:
-                    where_conditions.append("created_at LIKE ?")
-                    params.append(f"%{timestamp}%")
+                    like_conditions.append("created_at LIKE ?")
+                    like_params.append(f"%{timestamp}%")
                 
                 if title:
-                    where_conditions.append("title LIKE ?")
-                    params.append(f"%{title}%")
+                    like_conditions.append("title LIKE ?") 
+                    like_params.append(f"%{title}%")
                 
                 if category:
-                    where_conditions.append("category LIKE ?")
-                    params.append(f"%{category}%")
+                    like_conditions.append("category LIKE ?")
+                    like_params.append(f"%{category}%")
                 
                 if content_match:
-                    where_conditions.append("entry LIKE ?")
-                    params.append(f"%{content_match}%")
+                    like_conditions.append("entry LIKE ?")
+                    like_params.append(f"%{content_match}%")
+                
+                # 建立安全的 WHERE 子句
+                where_clause, where_params = SQLSafetyUtils.build_safe_where_clause(conditions)
+                
+                # 合併所有條件
+                all_conditions = [where_clause] if where_clause else []
+                all_conditions.extend(like_conditions)
+                all_params = where_params + like_params
+                
+                final_where_clause = " AND ".join(all_conditions)
                 
                 # 先查詢要刪除的條目
                 select_sql = f"""
                     SELECT id, title, created_at FROM memory_entries 
-                    WHERE {' AND '.join(where_conditions)}
+                    WHERE {final_where_clause}
                 """
-                cursor = conn.execute(select_sql, params)
+                cursor = conn.execute(select_sql, all_params)
                 entries_to_delete = cursor.fetchall()
                 
                 if not entries_to_delete:
                     return {'success': False, 'message': 'No matching entries found to delete'}
                 
                 # 執行刪除
-                delete_sql = f"DELETE FROM memory_entries WHERE {' AND '.join(where_conditions)}"
-                cursor = conn.execute(delete_sql, params)
+                delete_sql = f"DELETE FROM memory_entries WHERE {final_where_clause}"
+                cursor = conn.execute(delete_sql, all_params)
                 deleted_count = cursor.rowcount
                 
                 conn.commit()
@@ -2316,33 +2425,32 @@ class SQLiteBackend(MemoryBackend):
                        summary: str = None) -> bool:
         """編輯記憶條目（最終表）"""
         with self.get_connection() as conn:
-            updates = []
-            params = []
+            # 建立安全的更新欄位
+            update_fields = {}
             
             if title is not None:
-                updates.append("title = ?")
-                params.append(title)
+                update_fields["title"] = title
             if entry is not None:
-                updates.append("entry = ?")
-                params.append(entry)
+                update_fields["entry"] = entry
             if category is not None:
-                updates.append("category = ?")
-                params.append(category)
+                update_fields["category"] = category
             if entry_type is not None:
-                updates.append("entry_type = ?")
-                params.append(entry_type)
+                update_fields["entry_type"] = entry_type
             if summary is not None:
-                updates.append("summary = ?")
-                params.append(summary)
+                update_fields["summary"] = summary
                 
-            if not updates:
+            if not update_fields:
                 return False
-                
-            updates.append("updated_at = CURRENT_TIMESTAMP")
-            params.append(entry_id)
             
-            sql = f"UPDATE memory_entries SET {', '.join(updates)} WHERE id = ?"
-            cursor = conn.execute(sql, params)
+            # 使用安全的 UPDATE 子句建立器
+            update_clause, update_params = SQLSafetyUtils.build_safe_update_clause(update_fields)
+            
+            # 加入時間戳更新
+            update_clause += ", updated_at = CURRENT_TIMESTAMP"
+            update_params.append(entry_id)
+            
+            sql = f"UPDATE memory_entries SET {update_clause} WHERE id = ?"
+            cursor = conn.execute(sql, update_params)
             conn.commit()  # 手動提交事務
             return cursor.rowcount > 0
     
