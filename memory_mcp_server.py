@@ -25,6 +25,7 @@ import sys
 import sqlite3
 import time
 import csv
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -274,6 +275,111 @@ class SQLSafetyUtils:
                 return False
         
         return True
+
+# 檔案路徑安全工具
+class PathSafetyUtils:
+    """檔案路徑安全驗證工具"""
+    
+    @classmethod
+    def validate_safe_path(cls, path: Path, base_path: Path, operation: str = "access") -> Path:
+        """驗證路徑是否安全，防止目錄遍歷攻擊"""
+        try:
+            # 解析路徑為絕對路徑
+            abs_path = path.resolve()
+            abs_base = base_path.resolve()
+            
+            # 檢查路徑是否在基礎目錄內
+            try:
+                abs_path.relative_to(abs_base)
+            except ValueError:
+                raise SecurityError(
+                    f"路徑 '{path}' 超出允許的基礎目錄 '{base_path}' 範圍"
+                )
+            
+            # 檢查路徑長度
+            if len(str(abs_path)) > 4096:  # 大多數系統的路徑長度限制
+                raise ValidationError("檔案路徑過長")
+            
+            # 檢查危險的路徑組件（但排除根目錄的正常組件）
+            dangerous_components = {'..', '~', '$'}
+            for component in abs_path.parts[1:]:  # 跳過根路徑
+                if component in dangerous_components:
+                    raise SecurityError(f"路徑包含危險組件: '{component}'")
+                
+                # 檢查特殊字元
+                if any(char in component for char in ['<', '>', ':', '|', '?', '*']):
+                    raise SecurityError(f"路徑組件包含非法字元: '{component}'")
+            
+            # 檢查檔案名稱長度
+            if abs_path.name and len(abs_path.name) > 255:  # 大多數檔案系統的檔案名限制
+                raise ValidationError("檔案名稱過長")
+            
+            # 記錄安全操作
+            logger.debug(f"Path validation passed for {operation}: {abs_path}")
+            return abs_path
+            
+        except (OSError, ValueError) as e:
+            raise SecurityError(f"路徑驗證失敗: {e}")
+    
+    @classmethod
+    def validate_filename(cls, filename: str) -> str:
+        """驗證檔案名稱是否安全"""
+        if not filename or not isinstance(filename, str):
+            raise ValidationError("檔案名稱不能為空")
+        
+        filename = filename.strip()
+        if not filename:
+            raise ValidationError("檔案名稱不能為空白")
+        
+        # 檢查長度
+        if len(filename) > 255:
+            raise ValidationError("檔案名稱過長")
+        
+        # 檢查非法字元
+        illegal_chars = ['/', '\\', '<', '>', ':', '|', '?', '*', '"']
+        for char in illegal_chars:
+            if char in filename:
+                raise SecurityError(f"檔案名稱包含非法字元: '{char}'")
+        
+        # 檢查保留名稱 (Windows)
+        reserved_names = {
+            'CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 
+            'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 
+            'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+        }
+        if filename.upper() in reserved_names:
+            raise SecurityError(f"'{filename}' 是系統保留名稱")
+        
+        # 檢查隱藏檔案模式
+        if filename.startswith('.') and len(filename) > 1:
+            logger.warning(f"Creating hidden file: {filename}")
+        
+        return filename
+    
+    @classmethod
+    def sanitize_project_id_for_path(cls, project_id: str) -> str:
+        """清理專案ID使其適合作為檔案路徑"""
+        if not project_id:
+            raise ValidationError("專案ID不能為空")
+        
+        # 移除或替換危險字元
+        safe_chars = []
+        for char in project_id:
+            if char.isalnum() or char in '-_':
+                safe_chars.append(char)
+            elif char in ' \t':
+                safe_chars.append('_')
+            # 其他字元直接忽略
+        
+        safe_id = ''.join(safe_chars)
+        if not safe_id:
+            raise ValidationError("專案ID清理後為空")
+        
+        # 確保長度適中
+        if len(safe_id) > 100:
+            safe_id = safe_id[:100]
+        
+        return safe_id
 
 class FileLock:
     """跨平台檔案鎖定工具類"""
@@ -536,9 +642,28 @@ class MarkdownMemoryManager(MemoryBackend):
 
     def get_memory_file(self, project_id: str) -> Path:
         """取得專案記憶檔案路徑"""
-        # 清理專案 ID，移除不安全字符
-        clean_id = "".join(c for c in project_id if c.isalnum() or c in ('-', '_'))
-        return self.memory_dir / f"{clean_id}.md"
+        try:
+            # 使用安全的專案ID清理
+            clean_id = PathSafetyUtils.sanitize_project_id_for_path(project_id)
+            
+            # 驗證檔案名稱安全性
+            filename = PathSafetyUtils.validate_filename(f"{clean_id}.md")
+            
+            # 建立完整路徑
+            file_path = self.memory_dir / filename
+            
+            # 驗證路徑安全性
+            safe_path = PathSafetyUtils.validate_safe_path(
+                file_path, 
+                self.memory_dir, 
+                f"memory file access for project '{project_id}'"
+            )
+            
+            return safe_path
+            
+        except (ValidationError, SecurityError) as e:
+            logger.error(f"Path validation failed for project '{project_id}': {e}")
+            raise
 
     def get_memory(self, project_id: str) -> Optional[str]:
         """讀取完整專案記憶"""
