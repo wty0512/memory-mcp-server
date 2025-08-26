@@ -3742,9 +3742,91 @@ class MCPServer:
         """列出可用工具"""
         logger.info("[MCP] Starting list_tools function")
         tools = [
+            # 🎯 優先級工具：Claude 最常用的查詢工具放在前面
+            {
+                'name': 'list_memory_projects',
+                'description': '📂 查看所有可用的專案列表 / View all available projects - 🚀 開始任何工作前建議先查看',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {},
+                    'required': []
+                }
+            },
+            {
+                'name': 'search_project_memory',
+                'description': '🔍 搜尋專案記憶，回答專案相關問題 / Search project memory to answer questions - 🎯 優先使用此工具了解專案',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'query': {
+                            'type': 'string',
+                            'description': 'Search query'
+                        },
+                        'limit': {
+                            'type': 'integer',
+                            'description': 'Maximum number of results to return',
+                            'default': 10
+                        }
+                    },
+                    'required': ['project_id', 'query']
+                }
+            },
+            {
+                'name': 'get_project_memory',
+                'description': '📖 取得完整專案記憶內容 / Get full project memory content - 深入了解專案詳情',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        }
+                    },
+                    'required': ['project_id']
+                }
+            },
+            {
+                'name': 'get_recent_project_memory',
+                'description': '📅 取得最近的專案記憶條目 / Get recent project memory entries - 了解最新進展',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        },
+                        'limit': {
+                            'type': 'integer',
+                            'description': 'Number of recent entries to return',
+                            'default': 5
+                        }
+                    },
+                    'required': ['project_id']
+                }
+            },
+            # 📊 統計工具：快速了解專案概況
+            {
+                'name': 'get_project_memory_stats',
+                'description': '📊 取得專案記憶統計資訊 / Get project memory statistics - 快速了解專案規模和狀態',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'project_id': {
+                            'type': 'string',
+                            'description': 'Project identifier'
+                        }
+                    },
+                    'required': ['project_id']
+                }
+            },
+            # 💾 儲存工具：放在後面，避免Claude優先選擇
             {
                 'name': 'save_project_memory',
-                'description': '儲存資訊到專案記憶 / Save information to project-specific memory with optional title and category',
+                'description': '💾 儲存資訊到專案記憶 / Save information to project memory - 保存重要發現和決定',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -3768,88 +3850,10 @@ class MCPServer:
                     'required': ['project_id', 'content']
                 }
             },
-            {
-                'name': 'get_project_memory',
-                'description': '取得完整專案記憶內容 / Get full project memory content',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'project_id': {
-                            'type': 'string',
-                            'description': 'Project identifier'
-                        }
-                    },
-                    'required': ['project_id']
-                }
-            },
-            {
-                'name': 'search_project_memory',
-                'description': '搜尋專案內容，回答任何專案相關問題 / Search project content to answer any project-related questions',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'project_id': {
-                            'type': 'string',
-                            'description': 'Project identifier'
-                        },
-                        'query': {
-                            'type': 'string',
-                            'description': 'Search query'
-                        },
-                        'limit': {
-                            'type': 'integer',
-                            'description': 'Maximum number of results to return',
-                            'default': 10
-                        }
-                    },
-                    'required': ['project_id', 'query']
-                }
-            },
-            {
-                'name': 'list_memory_projects',
-                'description': '查看所有專案列表及統計資訊 / View all available projects and their statistics',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {},
-                    'required': []
-                }
-            },
-            {
-                'name': 'get_recent_project_memory',
-                'description': 'Get recent project memory entries for a project',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'project_id': {
-                            'type': 'string',
-                            'description': 'Project identifier'
-                        },
-                        'limit': {
-                            'type': 'integer',
-                            'description': 'Number of recent entries to return',
-                            'default': 5
-                        }
-                    },
-                    'required': ['project_id']
-                }
-            },
-            {
-                'name': 'get_project_memory_stats',
-                'description': 'Get statistics about a project\'s memory',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'project_id': {
-                            'type': 'string',
-                            'description': 'Project identifier'
-                        }
-                    },
-                    'required': ['project_id']
-                }
-            },
+            # 🗑️ 管理工具：危險操作放最後
             {
                 'name': 'delete_project_memory',
-                'description': 'Delete all project memory for a project (use with caution)',
+                'description': '⚠️ 刪除專案記憶 / Delete project memory - 危險操作，請謹慎使用',
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
@@ -4411,7 +4415,11 @@ No projects found. You can start creating your first memory!
                     projects = self.memory_manager.list_projects()
                     
                     if projects:
-                        text = f"📋 **Memory Projects ({len(projects)} total)**\n\n"
+                        text = f"📋 **Available Projects ({len(projects)} total)**\n\n"
+                        
+                        # 智能建議：分析專案狀態
+                        rich_projects = []  # 內容豐富的專案
+                        recent_projects = []  # 最近活動的專案
                         
                         # 顯示所有專案的摘要信息
                         for i, project in enumerate(projects, 1):
@@ -4420,9 +4428,44 @@ No projects found. You can start creating your first memory!
                             entries = project.get('entries_count', 0)
                             last_modified = str(project.get('last_modified', 'Unknown'))[:16]
                             
-                            text += f"**{i}.** `{project_id}` - {entries} entries ({last_modified})\n"
+                            # 根據內容多少給出不同的建議圖標
+                            if entries == 0:
+                                icon = "🆕"
+                                suggestion = "新專案"
+                            elif entries < 5:
+                                icon = "📝"
+                                suggestion = f"{entries} 條記憶"
+                            elif entries < 20:
+                                icon = "📚"
+                                suggestion = f"{entries} 條記憶"
+                                recent_projects.append(project_id)
+                            else:
+                                icon = "🏗️"
+                                suggestion = f"{entries} 條記憶 - 豐富專案"
+                                rich_projects.append(project_id)
+                            
+                            text += f"{icon} **{i}.** `{project_id}` - {suggestion} (更新: {last_modified})\n"
+                        
+                        # 智能建議區塊
+                        text += "\n---\n\n"
+                        text += "💡 **建議下一步 / Suggested Next Steps:**\n\n"
+                        
+                        if rich_projects:
+                            text += f"🔍 **豐富專案 ({len(rich_projects)} 個)**：建議使用 `search_project_memory` 搜尋具體內容\n"
+                            text += f"   推薦專案：{', '.join([f'`{p}`' for p in rich_projects[:3]])}\n\n"
+                        
+                        if recent_projects:
+                            text += f"📊 **活躍專案 ({len(recent_projects)} 個)**：使用 `get_project_memory_stats` 查看詳細統計\n"
+                            text += f"   推薦專案：{', '.join([f'`{p}`' for p in recent_projects[:3]])}\n\n"
+                        
+                        text += "🎯 **快速開始**：\n"
+                        text += "   • `search_project_memory(project_id, \"概況\")` - 了解專案概況\n"
+                        text += "   • `get_recent_project_memory(project_id)` - 查看最新進展\n"
+                        text += "   • `get_project_memory_stats(project_id)` - 專案統計資訊\n"
+                        
                     else:
-                        text = "📝 No projects found"
+                        text = "📝 **沒有找到專案**\n\n"
+                        text += "💡 使用 `save_project_memory` 開始記錄第一個專案的內容"
                     
                     return self._success_response(text)
                 except Exception as e:
