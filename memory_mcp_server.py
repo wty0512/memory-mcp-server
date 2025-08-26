@@ -7214,7 +7214,7 @@ def main():
     parser.add_argument(
         "--db-path",
         type=str,
-        help="[必填於 sqlite 模式] SQLite 資料庫路徑，支援 ~。例如: ~/.mcp/ai-memory/memory.db"
+        help="SQLite 資料庫路徑，支援 ~。預設: ~/.memory_mcp/memory.db"
     )
     
     args = parser.parse_args()
@@ -7298,9 +7298,15 @@ def main():
     
     # 創建後端（只有實際運行時才初始化）
     try:
-        if args.backend == "sqlite" and not args.db_path:
-            logger.error("--db-path is required when using sqlite backend. Example: --db-path=~/.mcp/ai-memory/memory.db")
-            sys.exit(1)
+        if args.backend == "sqlite":
+            # 如果沒有指定 db_path，使用預設路徑
+            if not args.db_path:
+                default_db_path = os.path.expanduser("~/.memory_mcp/memory.db")
+                args.db_path = default_db_path
+                logger.info(f"Using default database path: {args.db_path}")
+            else:
+                logger.info(f"Using custom database path: {args.db_path}")
+                
         backend = create_backend(args.backend, args.db_path)
         if args.backend == "sqlite":
             logger.info(f"Using sqlite backend with db path: {args.db_path}")
