@@ -80,12 +80,19 @@ class InputValidator:
     """輸入參數驗證器"""
     
     # 專案ID規則：只允許字母、數字、底線、連字號，長度限制
-    PROJECT_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,100}$')
+    @classmethod
+    def _get_project_id_pattern(cls):
+        max_len = config.get('validation', 'max_project_id_length', 100)
+        return re.compile(f'^[a-zA-Z0-9_-]{{1,{max_len}}}$')
     
-    # 內容長度限制 (50MB)
-    MAX_CONTENT_LENGTH = 50 * 1024 * 1024
-    MAX_TITLE_LENGTH = 500
-    MAX_CATEGORY_LENGTH = 100
+    @classmethod
+    def _get_limits(cls):
+        return {
+            'content': config.get('validation', 'max_content_length', 50 * 1024 * 1024),
+            'title': config.get('validation', 'max_title_length', 500),
+            'category': config.get('validation', 'max_category_length', 100),
+            'query': config.get('validation', 'max_query_length', 1000),
+        }
     
     @classmethod
     def validate_project_id(cls, project_id: str) -> str:
@@ -97,9 +104,11 @@ class InputValidator:
         if not project_id:
             raise ValidationError("專案ID不能為空白")
         
-        if not cls.PROJECT_ID_PATTERN.match(project_id):
+        pattern = cls._get_project_id_pattern()
+        max_len = config.get('validation', 'max_project_id_length', 100)
+        if not pattern.match(project_id):
             raise ValidationError(
-                "專案ID只能包含英文字母、數字、底線和連字號，長度不超過100字元"
+                f"專案ID只能包含英文字母、數字、底線和連字號，長度不超過{max_len}字元"
             )
         
         # 檢查保留字
@@ -115,8 +124,9 @@ class InputValidator:
         if not isinstance(content, str):
             raise ValidationError("內容必須為字串")
         
-        if len(content) > cls.MAX_CONTENT_LENGTH:
-            raise ValidationError(f"內容長度不能超過 {cls.MAX_CONTENT_LENGTH // (1024*1024)} MB")
+        limits = cls._get_limits()
+        if len(content) > limits['content']:
+            raise ValidationError(f"內容長度不能超過 {limits['content'] // (1024*1024)} MB")
         
         # 檢查是否包含惡意內容
         if cls._contains_suspicious_patterns(content):
@@ -134,8 +144,9 @@ class InputValidator:
             raise ValidationError("標題必須為字串")
         
         title = title.strip()
-        if len(title) > cls.MAX_TITLE_LENGTH:
-            raise ValidationError(f"標題長度不能超過 {cls.MAX_TITLE_LENGTH} 字元")
+        limits = cls._get_limits()
+        if len(title) > limits['title']:
+            raise ValidationError(f"標題長度不能超過 {limits['title']} 字元")
         
         return title
     
@@ -149,8 +160,9 @@ class InputValidator:
             raise ValidationError("分類必須為字串")
         
         category = category.strip()
-        if len(category) > cls.MAX_CATEGORY_LENGTH:
-            raise ValidationError(f"分類長度不能超過 {cls.MAX_CATEGORY_LENGTH} 字元")
+        limits = cls._get_limits()
+        if len(category) > limits['category']:
+            raise ValidationError(f"分類長度不能超過 {limits['category']} 字元")
         
         # 分類只允許特定字元
         if category and not re.match(r'^[a-zA-Z0-9_\-\u4e00-\u9fff\s]+$', category):
@@ -168,8 +180,9 @@ class InputValidator:
         if not query:
             raise ValidationError("搜尋查詢不能為空")
         
-        if len(query) > 1000:
-            raise ValidationError("搜尋查詢長度不能超過 1000 字元")
+        limits = cls._get_limits()
+        if len(query) > limits['query']:
+            raise ValidationError(f"搜尋查詢長度不能超過 {limits['query']} 字元")
         
         return query
     
@@ -309,8 +322,9 @@ class PathSafetyUtils:
                 )
             
             # 檢查路徑長度
-            if len(str(abs_path)) > 4096:  # 大多數系統的路徑長度限制
-                raise ValidationError("檔案路徑過長")
+            max_path_len = config.get('paths', 'max_path_length', 4096)
+            if len(str(abs_path)) > max_path_len:
+                raise ValidationError(f"檔案路徑長度不能超過 {max_path_len} 字元")
             
             # 檢查危險的路徑組件（但排除根目錄的正常組件）
             dangerous_components = {'..', '~', '$'}
@@ -323,8 +337,9 @@ class PathSafetyUtils:
                     raise SecurityError(f"路徑組件包含非法字元: '{component}'")
             
             # 檢查檔案名稱長度
-            if abs_path.name and len(abs_path.name) > 255:  # 大多數檔案系統的檔案名限制
-                raise ValidationError("檔案名稱過長")
+            max_filename_len = config.get('paths', 'max_filename_length', 255)
+            if abs_path.name and len(abs_path.name) > max_filename_len:
+                raise ValidationError(f"檔案名稱長度不能超過 {max_filename_len} 字元")
             
             # 記錄安全操作
             logger.debug(f"Path validation passed for {operation}: {abs_path}")
@@ -393,13 +408,178 @@ class PathSafetyUtils:
         
         return safe_id
 
+# 配置管理系統
+class ConfigManager:
+    """配置管理器"""
+    
+    # 預設配置
+    DEFAULT_CONFIG = {
+        # 資料庫配置
+        'database': {
+            'timeout': 30.0,
+            'check_same_thread': False,
+            'text_factory': 'str',
+            'encoding': 'UTF-8',
+            'page_size': 4096,
+            'cache_size': -2000,  # 2MB
+        },
+        
+        # 檔案操作配置
+        'file_operations': {
+            'lock_timeout': 30.0,
+            'lock_retry_delay': 0.1,
+            'atomic_write': True,
+            'backup_enabled': False,
+        },
+        
+        # 搜尋配置
+        'search': {
+            'default_limit': 10,
+            'max_limit': 100,
+            'token_limit': 1500,
+            'content_preview_length': 400,
+        },
+        
+        # 驗證配置
+        'validation': {
+            'max_content_length': 50 * 1024 * 1024,  # 50MB
+            'max_title_length': 500,
+            'max_category_length': 100,
+            'max_query_length': 1000,
+            'max_project_id_length': 100,
+        },
+        
+        # 路徑配置
+        'paths': {
+            'max_path_length': 4096,
+            'max_filename_length': 255,
+            'memory_dir': 'ai-memory',
+        },
+        
+        # 日誌配置
+        'logging': {
+            'level': 'INFO',
+            'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            'max_file_size': 10 * 1024 * 1024,  # 10MB
+            'backup_count': 5,
+        },
+        
+        # 效能配置
+        'performance': {
+            'connection_pool_size': 5,
+            'query_cache_size': 100,
+            'enable_profiling': False,
+        }
+    }
+    
+    def __init__(self, config_file: str = None, config_dict: dict = None):
+        """初始化配置管理器"""
+        self.config = self.DEFAULT_CONFIG.copy()
+        self.config_file = config_file
+        
+        if config_dict:
+            self._merge_config(config_dict)
+        elif config_file and Path(config_file).exists():
+            self._load_from_file(config_file)
+        
+        # 載入環境變數覆寫
+        self._load_from_env()
+    
+    def _merge_config(self, config_dict: dict):
+        """合併配置字典"""
+        def deep_merge(base, override):
+            for key, value in override.items():
+                if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+                    deep_merge(base[key], value)
+                else:
+                    base[key] = value
+        
+        deep_merge(self.config, config_dict)
+    
+    def _load_from_file(self, config_file: str):
+        """從檔案載入配置"""
+        try:
+            import json
+            with open(config_file, 'r', encoding='utf-8') as f:
+                file_config = json.load(f)
+            self._merge_config(file_config)
+            logger.info(f"Configuration loaded from {config_file}")
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Failed to load config from {config_file}: {e}")
+            raise ConfigurationError(f"配置檔案載入失敗: {e}")
+    
+    def _load_from_env(self):
+        """從環境變數載入配置"""
+        env_mappings = {
+            'MEMORY_DB_TIMEOUT': ('database', 'timeout', float),
+            'MEMORY_LOCK_TIMEOUT': ('file_operations', 'lock_timeout', float),
+            'MEMORY_SEARCH_LIMIT': ('search', 'default_limit', int),
+            'MEMORY_MAX_CONTENT_SIZE': ('validation', 'max_content_length', int),
+            'MEMORY_LOG_LEVEL': ('logging', 'level', str),
+            'MEMORY_DIR': ('paths', 'memory_dir', str),
+        }
+        
+        for env_key, (section, key, type_func) in env_mappings.items():
+            env_value = os.getenv(env_key)
+            if env_value is not None:
+                try:
+                    self.config[section][key] = type_func(env_value)
+                    logger.debug(f"Config override from env: {env_key}={env_value}")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid env config {env_key}={env_value}: {e}")
+    
+    def get(self, section: str, key: str = None, default=None):
+        """取得配置值"""
+        try:
+            if key is None:
+                return self.config.get(section, default)
+            return self.config.get(section, {}).get(key, default)
+        except (KeyError, TypeError):
+            return default
+    
+    def set(self, section: str, key: str, value):
+        """設定配置值"""
+        if section not in self.config:
+            self.config[section] = {}
+        self.config[section][key] = value
+    
+    def save_to_file(self, filename: str):
+        """儲存配置到檔案"""
+        try:
+            import json
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
+            logger.info(f"Configuration saved to {filename}")
+        except IOError as e:
+            logger.error(f"Failed to save config to {filename}: {e}")
+            raise ConfigurationError(f"配置檔案儲存失敗: {e}")
+    
+    def validate(self):
+        """驗證配置有效性"""
+        required_sections = ['database', 'file_operations', 'search', 'validation']
+        for section in required_sections:
+            if section not in self.config:
+                raise ConfigurationError(f"缺少必要配置區塊: {section}")
+        
+        # 驗證數值範圍
+        if self.get('database', 'timeout', 0) <= 0:
+            raise ConfigurationError("資料庫超時時間必須大於0")
+        
+        if self.get('search', 'max_limit', 0) <= 0:
+            raise ConfigurationError("搜尋結果上限必須大於0")
+        
+        logger.info("Configuration validation passed")
+
+# 全域配置實例
+config = ConfigManager()
+
 class FileLock:
     """跨平台檔案鎖定工具類"""
     
-    def __init__(self, file_path: Path, timeout: float = 30.0, retry_delay: float = 0.1):
+    def __init__(self, file_path: Path, timeout: float = None, retry_delay: float = None):
         self.file_path = file_path
-        self.timeout = timeout
-        self.retry_delay = retry_delay
+        self.timeout = timeout or config.get('file_operations', 'lock_timeout', 30.0)
+        self.retry_delay = retry_delay or config.get('file_operations', 'lock_retry_delay', 0.1)
         self.lock_file = None
         self.locked = False
     
