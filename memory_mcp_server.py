@@ -32,7 +32,6 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 import difflib
 import re
-import time
 
 # 跨平台檔案鎖定支援
 try:
