@@ -30,10 +30,16 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
 ### 🎯 **核心功能** / **Core Features**
 - 📤 **多格式匯出**：支援 Markdown、JSON、CSV、TXT 格式匯出  
   **Multi-format Export**: Support export to Markdown, JSON, CSV, TXT formats
-- 🔍 **智能搜尋**：全文搜尋、分類篩選、專案內搜尋  
-  **Intelligent Search**: Full-text search, category filtering, project-specific search
-- 📊 **專案管理**：分類管理、統計分析、專案重命名  
-  **Project Management**: Category management, statistical analysis, project renaming
+- 🔍 **智能搜尋**：全文搜尋、分類篩選、專案內搜尋、智能路由優化  
+  **Intelligent Search**: Full-text search, category filtering, project-specific search, smart routing optimization
+- 🧠 **RAG 增強問答**：基於專案記憶的智能問答系統，支援複雜查詢  
+  **RAG-Enhanced Q&A**: Intelligent Q&A system based on project memory, supports complex queries
+- 📊 **專案管理**：分類管理、統計分析、專案重命名、階層結構展示  
+  **Project Management**: Category management, statistical analysis, project renaming, hierarchical structure display
+- 🏷️ **智能標籤建議**：自動分析內容並建議合適標籤分類  
+  **Smart Tag Suggestions**: Automatically analyze content and suggest appropriate tags
+- 🔗 **內容關聯分析**：多維度相似性計算，發現相關內容  
+  **Content Relationship Analysis**: Multi-dimensional similarity calculation to discover related content
 - 🕒 **時間追蹤**：創建時間、更新時間自動記錄  
   **Time Tracking**: Automatic creation and update timestamp recording
 - ✏️ **條目管理**：新增、編輯、刪除特定記憶條目  
@@ -42,6 +48,10 @@ A Python-based Model Context Protocol (MCP) server providing intelligent memory 
   **Precise Targeting**: By ID, timestamp, title, category, content matching
 - 📋 **條目列表**：方便查看和管理所有記憶條目  
   **Entry Listing**: Easy viewing and management of all memory entries
+- 📝 **語義搜尋**：查詢擴展與語義相關內容搜尋  
+  **Semantic Search**: Query expansion and semantically related content search
+- 📊 **專案摘要**：支援簡略、詳細、時間線三種摘要模式  
+  **Project Summary**: Supports brief, detailed, and timeline summary modes
 
 ### 🌐 **整合支援** / **Integration Support**
 - 🚀 **啟動時自動顯示專案列表**，提升使用體驗  
@@ -88,7 +98,20 @@ chmod +x start_server.sh
 # If you have existing Markdown memory files, the system will handle them automatically
 ```
 
-### 3. 設定 Claude Desktop
+### 3. 自動設定工具（推薦）/ Automatic Setup Tool (Recommended)
+
+```bash
+# 使用自動設定工具 / Use automatic setup tool
+python3 setup_claude_code.py
+
+# 工具會自動：/ The tool will automatically:
+# 1. 偵測您的作業系統 / Detect your operating system
+# 2. 找到 Claude Code 配置檔案 / Find Claude Code config file
+# 3. 備份現有配置 / Backup existing configuration
+# 4. 自動添加記憶伺服器配置 / Add memory server configuration
+```
+
+### 4. 手動設定 Claude Desktop（如果自動設定失敗）
 
 #### 步驟 1: 找到設定檔位置
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -396,10 +419,30 @@ The system automatically detects and migrates data from older versions:
 - `get_recent_project_memory` - 獲取最近的記憶條目
 - `get_project_memory_stats` - 獲取記憶統計信息
 - `delete_project_memory` - 刪除專案記憶（謹慎使用）
-- `🆕 list_project_memory_entries` - 列出專案中的所有記憶條目（帶ID編號）
-- `🆕 delete_project_memory_entry` - 刪除特定的記憶條目
-- `🆕 edit_project_memory_entry` - 編輯特定的記憶條目
-- `📤 export_project_memory` - 匯出專案記憶為多種格式（Markdown、JSON、CSV、TXT）
+- `list_project_memory_entries` - 列出專案中的所有記憶條目（帶ID編號）
+- `delete_project_memory_entry` - 刪除特定的記憶條目
+- `edit_project_memory_entry` - 編輯特定的記憶條目
+- `export_project_memory` - 匯出專案記憶為多種格式（Markdown、JSON、CSV、TXT）
+- `rename_project` - 重命名專案
+
+#### 🧠 智能功能
+- `rag_query` - 基於專案記憶的智能問答（RAG-based Q&A）
+- `summarize_project` - 生成專案內容摘要（簡略/詳細/時間線）
+- `semantic_search` - 語義相關內容搜尋，智能擴展查詢關鍵字
+- `suggest_tags` - 智能標籤和分類建議
+- `analyze_content_relations` - 內容關聯分析，尋找相關記憶條目
+- `search_index` - 智能索引搜尋，大幅減少 token 使用
+- `get_hierarchy_tree` - 獲取專案的階層樹狀結構
+- `rebuild_index_for_project` - 為專案重建所有索引條目
+- `get_index_stats` - 獲取索引統計資訊
+- `update_index_entry` - 更新索引條目的階層和分類資訊
+
+#### 📥 匯入功能
+- `import_project_memory_universal` - 通用匯入，自動偵測格式
+- `import_project_memory_from_markdown` - 從 Markdown 檔案匯入
+- `import_project_memory_from_json` - 從 JSON 檔案匯入
+- `import_project_memory_from_csv` - 從 CSV 檔案匯入
+- `import_project_memory_from_txt` - 從純文字檔案匯入
 
 #### 全局記憶功能
 - `🌐 save_global_memory` - 儲存內容到全局記憶
@@ -685,6 +728,23 @@ type %APPDATA%\Claude\claude_desktop_config.json
 **享受您的 AI 記憶管理系統！** 🚀
 
 ## 📋 更新日誌 / Changelog
+
+### 🎉 **版本 2.1.0 - 智能增強版** / **Version 2.1.0 - Intelligence Enhanced**
+
+#### 🧠 新增智能功能
+- ✨ **RAG 增強問答**：實作基於專案記憶的智能問答系統
+- 🔍 **語義搜尋**：支援查詢擴展與語義相關內容搜尋
+- 🏷️ **智能標籤建議**：自動分析內容並建議合適的標籤分類
+- 🔗 **內容關聯分析**：多維度相似性計算，發現相關內容連結
+- 📊 **專案摘要生成**：支援簡略、詳細、時間線三種摘要模式
+- 🚀 **智能路由優化**：自動選擇最佳搜尋策略，減少 token 消耗
+- 📋 **索引系統**：實作階層化索引結構，支援高效查詢
+
+#### 🔧 系統優化
+- ✅ **Claude Code 整合**：完整支援 Claude Code SuperClaude 框架
+- 🔄 **自動設定工具**：提供 setup_claude_code.py 自動配置腳本
+- 📝 **CLAUDE.md 文件**：專門為 Claude Code 提供開發指南
+- 🐛 **Bug 修復**：修正 project_id → project 欄位名稱問題
 
 ### 🎉 **版本 2.0.0 - 架構重構完成** / **Version 2.0.0 - Architecture Refactoring Complete**
 
